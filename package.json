@@ -1,0 +1,17 @@
+{
+  "name": "theinformation-daily",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "fetch:theinformation": "node scripts/fetch-theinformation.mjs",
+    "render:theinformation": "node scripts/render-theinformation-report.mjs",
+    "brief:theinformation": "powershell -ExecutionPolicy Bypass -File .\\scripts\\generate-theinformation-brief.ps1",
+    "daily:theinformation": "powershell -ExecutionPolicy Bypass -File .\\scripts\\run-theinformation-daily.ps1"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "jsdom": "^26.1.0",
+    "puppeteer-core": "^24.26.1"
+  }
+}

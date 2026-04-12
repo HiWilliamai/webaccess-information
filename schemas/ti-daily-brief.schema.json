@@ -1,0 +1,160 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "today_status_summary",
+    "featured_articles",
+    "other_articles",
+    "partial_articles",
+    "blocked_articles",
+    "unprocessed_articles"
+  ],
+  "properties": {
+    "today_status_summary": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "featured_articles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/article"
+      }
+    },
+    "other_articles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/article"
+      }
+    },
+    "partial_articles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/incompleteArticle"
+      }
+    },
+    "blocked_articles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/incompleteArticle"
+      }
+    },
+    "unprocessed_articles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/incompleteArticle"
+      }
+    }
+  },
+  "$defs": {
+    "sectionedBullets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "heading",
+        "lead",
+        "bullets"
+      ],
+      "properties": {
+        "heading": {
+          "type": "string"
+        },
+        "lead": {
+          "type": "string"
+        },
+        "bullets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "article": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "section",
+        "authors",
+        "publication_time",
+        "original_link",
+        "core_viewpoint",
+        "key_data_sections",
+        "insight_sections",
+        "why_it_matters"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "section": {
+          "type": "string"
+        },
+        "authors": {
+          "type": "string"
+        },
+        "publication_time": {
+          "type": "string"
+        },
+        "original_link": {
+          "type": "string"
+        },
+        "core_viewpoint": {
+          "type": "string"
+        },
+        "key_data_sections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sectionedBullets"
+          }
+        },
+        "insight_sections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sectionedBullets"
+          }
+        },
+        "why_it_matters": {
+          "type": "string"
+        }
+      }
+    },
+    "incompleteArticle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "section",
+        "publication_time",
+        "original_link",
+        "issue_summary",
+        "missing_details"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "section": {
+          "type": "string"
+        },
+        "publication_time": {
+          "type": "string"
+        },
+        "original_link": {
+          "type": "string"
+        },
+        "issue_summary": {
+          "type": "string"
+        },
+        "missing_details": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+node_modules/
+
+# Local browser profile and login/session data.
+bb-profile/
+
+# Generated reports and article snapshots.
+output/
+knowledge base/
+
+# Local Codex binaries copied from the desktop app.
+.tools/
+tmp-codex.exe
+tmp-codex-command-runner.exe
+
+# Logs and temporary files.
+*.log
+*.tmp
+.DS_Store
+Thumbs.db

@@ -1,0 +1,86 @@
+Read these files in the workspace:
+
+- `output/theinformation-latest.json`
+- `output/theinformation-latest.txt`
+- `output/theinformation-latest.html`
+
+Return JSON only, matching the provided output schema exactly.
+All analytical strings must be written in Chinese. Keep article titles, company names, product names, person names, and original links in their source form when appropriate.
+
+Core output goal:
+
+- Produce an article-by-article Chinese reading brief.
+- The brief must read like a serious research note for a student or operator.
+- Read each article body carefully and synthesize the full argument before writing.
+- Do not simply rewrite extracted takeaways or lift English sentences from the source.
+
+Coverage rules:
+
+- Cover every article already included in the filtered coverage window.
+- Do not omit any article that appears in the source files.
+- Do not invent facts that are not supported by the source files.
+
+Classification rules:
+
+- Put priority full articles into `featured_articles`.
+- A full article is priority if it is marked `Exclusive`, or if it is materially related to OpenAI, Anthropic, Claude, ChatGPT, Codex, AI models, AI infrastructure, chips, GPUs, data centers, cloud, model routing, developer tooling, AI agents, enterprise AI, or foundational AI platforms.
+- If an article is both `Exclusive` and AI-related, treat it as especially important and make the analysis more detailed than normal.
+- Put other full articles into `other_articles`.
+- If an article is incomplete, teaser-like, or clearly lacks enough full-body content for reliable article-level analysis, put it into `partial_articles`.
+- If an article is blocked by Cloudflare or a similar challenge, put it into `blocked_articles`.
+- If an article was not processed, put it into `unprocessed_articles`.
+
+Required article structure for full articles:
+
+- Each full article must support this final rendered structure:
+  - `标题`
+  - `栏目 / 作者 / 发布时间 / 原文链接`
+  - `##核心观点`
+  - `##关键数据与事实（超高颗粒度）`
+  - `##超高颗粒度洞察`
+  - `##为什么重要`
+- `core_viewpoint` must be a synthesized Chinese paragraph based on the full article body. It should capture the real thesis of the article, not just restate the headline.
+- `key_data_sections` must be grouped into thematic subsections instead of one flat list.
+- `insight_sections` must be grouped into thematic subsections instead of one flat list.
+
+Rules for `key_data_sections`:
+
+- Each subsection needs:
+  - `heading`: a clear Chinese mini-title, such as `流量与点击转化极其惨淡`, `融资与估值`, `收入与成本`, `用户规模与使用情况`, `客户结构`, `供给与产能`, `定价机制`, `竞品对比`.
+  - `lead`: one concise Chinese sentence summarizing what this subsection proves overall.
+  - `bullets`: 2 to 5 Chinese bullet texts.
+- Bullets must contain concrete facts actually present in the source files, such as dates, valuations, prices, revenues, counts, percentages, capacities, usage figures, downloads, exposure, or timing milestones.
+- Avoid mixing unrelated facts into one subsection.
+- Do not dump raw English source sentences into this section.
+
+Rules for `insight_sections`:
+
+- Each subsection needs:
+  - `heading`: a clear Chinese mini-title that follows the article's internal logic, such as `展示机制`, `算法窥探与反哺`, `竞争格局`, `客户行为`, `平台权力`, `风险与瓶颈`, `渠道控制`, `战略外溢`, `基础设施护城河`.
+  - `lead`: one concise Chinese sentence stating the subsection's main conclusion.
+  - `bullets`: 2 to 4 Chinese bullet texts that unpack implications, incentives, strategic consequences, second-order effects, operational bottlenecks, go-to-market meaning, customer behavior, or platform power shifts.
+- Do not write dense all-in-one bullets. One bullet should express one clear idea.
+- These subsections should feel layered and teachable, like a structured briefing note.
+
+Depth rules:
+
+- For `featured_articles`, prefer 3 to 6 subsections in `key_data_sections`.
+- For `featured_articles`, prefer 3 to 5 subsections in `insight_sections`.
+- For especially important `Exclusive` and AI-related stories, use the upper end of the detail range whenever the source supports it.
+- For `other_articles`, prefer 2 to 4 subsections for each grouped section.
+
+Field rules:
+
+- `authors` must be a Chinese-readable joined string.
+- `publication_time` should use the readable publication time from the source files whenever available.
+- `today_status_summary` must be an array of concise Chinese lines summarizing success status, omissions, blocked items, incomplete items, and whether there are especially important priority stories.
+- For `partial_articles`, `blocked_articles`, and `unprocessed_articles`, `issue_summary` must explain the problem in Chinese, and `missing_details` must be an array of Chinese bullet texts explaining what is missing or why full analysis is not possible.
+
+Style rules:
+
+- Write in clear, serious Chinese.
+- Keep the article title itself in source language if that is how it appears.
+- Keep the structure highly readable for a student.
+- Use grouped sections and layered reasoning, not giant undifferentiated paragraphs.
+- Do not output placeholder phrases like `未提取到单独 takeaway`.
+- Do not output sections such as `导语` or `全文保留`.
