@@ -76,6 +76,7 @@
       "additionalProperties": false,
       "required": [
         "title",
+        "title_translation",
         "section",
         "authors",
         "publication_time",
@@ -87,6 +88,9 @@
       ],
       "properties": {
         "title": {
+          "type": "string"
+        },
+        "title_translation": {
           "type": "string"
         },
         "section": {

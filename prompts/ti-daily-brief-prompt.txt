@@ -33,8 +33,9 @@ Classification rules:
 Required article structure for full articles:
 
 - Each full article must support this final rendered structure:
-  - `标题`
-  - `栏目 / 作者 / 发布时间 / 原文链接`
+  - `title`
+  - `title_translation`
+  - `section / authors / publication_time / original_link`
   - `##核心观点`
   - `##关键数据与事实（超高颗粒度）`
   - `##超高颗粒度洞察`
@@ -56,7 +57,7 @@ Rules for `key_data_sections`:
 Rules for `insight_sections`:
 
 - Each subsection needs:
-  - `heading`: a clear Chinese mini-title that follows the article's internal logic, such as `展示机制`, `算法窥探与反哺`, `竞争格局`, `客户行为`, `平台权力`, `风险与瓶颈`, `渠道控制`, `战略外溢`, `基础设施护城河`.
+  - `heading`: a clear Chinese mini-title that follows the article's internal logic, such as `展示机制`, `算法窥探与反馈`, `竞争格局`, `客户行为`, `平台权力`, `风险与瓶颈`, `渠道控制`, `战略外溢`, `基础设施护城河`.
   - `lead`: one concise Chinese sentence stating the subsection's main conclusion.
   - `bullets`: 2 to 4 Chinese bullet texts that unpack implications, incentives, strategic consequences, second-order effects, operational bottlenecks, go-to-market meaning, customer behavior, or platform power shifts.
 - Do not write dense all-in-one bullets. One bullet should express one clear idea.
@@ -72,6 +73,7 @@ Depth rules:
 Field rules:
 
 - `authors` must be a Chinese-readable joined string.
+- `title_translation` must be a concise Chinese translation of the English title, suitable for displaying directly below the original title.
 - `publication_time` should use the readable publication time from the source files whenever available.
 - `today_status_summary` must be an array of concise Chinese lines summarizing success status, omissions, blocked items, incomplete items, and whether there are especially important priority stories.
 - For `partial_articles`, `blocked_articles`, and `unprocessed_articles`, `issue_summary` must explain the problem in Chinese, and `missing_details` must be an array of Chinese bullet texts explaining what is missing or why full analysis is not possible.
@@ -80,7 +82,8 @@ Style rules:
 
 - Write in clear, serious Chinese.
 - Keep the article title itself in source language if that is how it appears.
+- The Chinese title translation should stay concise and should not replace the original title.
 - Keep the structure highly readable for a student.
 - Use grouped sections and layered reasoning, not giant undifferentiated paragraphs.
-- Do not output placeholder phrases like `未提取到单独 takeaway`.
+- Do not output placeholder phrases.
 - Do not output sections such as `导语` or `全文保留`.

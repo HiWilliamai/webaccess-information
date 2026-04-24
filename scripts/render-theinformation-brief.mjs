@@ -36,7 +36,9 @@ function renderBulletLines(items) {
 }
 
 function renderHtmlList(items) {
-  return listOrNone(items).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  return listOrNone(items)
+    .map((item) => `<li>${escapeHtml(item)}</li>`)
+    .join("");
 }
 
 function renderStructuredBlocksText(blocks) {
@@ -97,9 +99,15 @@ function renderMetadataLines(article) {
   ];
 }
 
+function renderTitleTranslationText(article) {
+  const translation = normalizeText(article.title_translation);
+  return translation ? [translation, ""] : [];
+}
+
 function renderArticleText(article) {
   return [
     `${normalizeText(article.title) || "未提供标题"}`,
+    ...renderTitleTranslationText(article),
     ...renderMetadataLines(article),
     "",
     "##核心观点",
@@ -182,9 +190,12 @@ function renderMetaGridHtml(lines) {
 }
 
 function renderArticleHtml(article) {
+  const titleTranslation = normalizeText(article.title_translation);
+
   return `
     <article class="article-card">
       <h2>${escapeHtml(normalizeText(article.title) || "未提供标题")}</h2>
+      ${titleTranslation ? `<p class="title-translation">${escapeHtml(titleTranslation)}</p>` : ""}
       <div class="meta-grid">
         ${renderMetaGridHtml(renderMetadataLines(article))}
       </div>
@@ -252,7 +263,6 @@ function renderHtml(data) {
         --muted: #6a6156;
         --line: #dccfb8;
         --accent: #8f3218;
-        --accent-soft: #f5e7d4;
         --shadow: 0 20px 46px rgba(74, 48, 18, 0.12);
       }
       * { box-sizing: border-box; }
@@ -321,6 +331,12 @@ function renderHtml(data) {
         margin: 0 0 12px;
         font-size: 26px;
       }
+      .title-translation {
+        margin: -4px 0 14px;
+        color: var(--accent);
+        font-size: 20px;
+        line-height: 1.65;
+      }
       .meta-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -358,25 +374,28 @@ function renderHtml(data) {
         line-height: 1.95;
       }
       .structured-block {
-        margin-top: 14px;
-        padding: 14px 16px;
-        background: var(--accent-soft);
-        border-radius: 16px;
+        background: #fbf6ee;
+        border: 1px solid #ecdfc9;
+        border-radius: 18px;
+        padding: 16px 18px;
+      }
+      .structured-block + .structured-block {
+        margin-top: 12px;
       }
       .structured-block h4 {
         margin: 0 0 8px;
-        font-size: 17px;
+        font-size: 18px;
       }
-      .structured-block .block-lead {
-        margin: 0 0 8px;
-        line-height: 1.8;
+      .block-lead {
+        margin-bottom: 8px;
+        color: var(--muted);
       }
       .empty {
         color: var(--muted);
       }
-      @media (max-width: 760px) {
+      @media (max-width: 720px) {
         .page {
-          width: min(100% - 14px, 1080px);
+          width: min(100% - 16px, 1080px);
         }
         .hero,
         .summary-panel,
@@ -396,7 +415,7 @@ function renderHtml(data) {
   <body>
     <div class="page">
       <header class="hero">
-        <h1>The Information 每日高颗粒度阅读稿</h1>
+        <h1>The Information 中文高颗粒度阅读稿</h1>
         <p>按篇输出核心观点、关键数据与事实、超高颗粒度洞察和为什么重要，优先突出重点文章，并单独标记不完整、被拦截或未处理的稿件。</p>
       </header>
 
@@ -419,15 +438,25 @@ function main() {
   const inputPath = getArgValue("--input") || DEFAULT_INPUT_PATH;
   const textPath = getArgValue("--text-output") || DEFAULT_TEXT_PATH;
   const htmlPath = getArgValue("--html-output") || DEFAULT_HTML_PATH;
-
-  const raw = fs.readFileSync(inputPath, "utf8");
-  const data = JSON.parse(raw);
+  const data = JSON.parse(fs.readFileSync(inputPath, "utf8"));
 
   fs.mkdirSync(path.dirname(textPath), { recursive: true });
   fs.mkdirSync(path.dirname(htmlPath), { recursive: true });
-
   fs.writeFileSync(textPath, renderText(data), "utf8");
   fs.writeFileSync(htmlPath, renderHtml(data), "utf8");
+
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        inputPath,
+        textPath,
+        htmlPath
+      },
+      null,
+      2
+    )
+  );
 }
 
 main();
