@@ -45,7 +45,7 @@ The Lark index document remains a lightweight archive page:
 - one entry per report date
 - link to the daily detail document
 - short featured-title list
-- short status-summary list
+- no daily status-summary list
 
 ## Publishing Behavior
 

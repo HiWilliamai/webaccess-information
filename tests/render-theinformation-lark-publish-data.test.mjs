@@ -117,7 +117,8 @@ test("buildPublishPayload derives titles, strips BOM, and builds index entry tem
   assert.equal(payload.detailMarkdown.startsWith("\uFEFF"), false);
   assert.match(payload.indexEntryMarkdown, /\{\{DOC_URL\}\}/);
   assert.match(payload.indexEntryMarkdown, /Behind Cursor's Deal With SpaceX/);
-  assert.match(payload.indexEntryMarkdown, /本次覆盖时间窗内共有 4 篇文章进入分析范围。/);
+  assert.doesNotMatch(payload.indexEntryMarkdown, /状态摘要/);
+  assert.doesNotMatch(payload.indexEntryMarkdown, /本次覆盖时间窗内共有 4 篇文章进入分析范围。/);
 });
 
 test("buildPublishPayload formats detail markdown for Lark with article numbering and section hierarchy", () => {

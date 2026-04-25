@@ -5,17 +5,13 @@ function normalizeText(value) {
 function buildIndexEntryMarkdown({ reportDateKey, detailTitle, featuredTitles, statusSummary }) {
   const featuredLines =
     featuredTitles.length > 0 ? featuredTitles.map((title) => `  - ${title}`).join("\n") : "  - 暂无";
-  const statusLines =
-    statusSummary.length > 0 ? statusSummary.map((item) => `  - ${item}`).join("\n") : "  - 暂无";
 
   return [
     `## ${reportDateKey}`,
     "",
     `- 明细文档：[${detailTitle}]({{DOC_URL}})`,
     "- 重点文章：",
-    featuredLines,
-    "- 状态摘要：",
-    statusLines
+    featuredLines
   ].join("\n");
 }
 
