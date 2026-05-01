@@ -39,6 +39,9 @@ powershell -ExecutionPolicy Bypass -File (Join-Path $root "scripts\generate-thei
   -BriefTextPath $briefTextPath `
   -BriefHtmlPath $briefHtmlPath `
   -BriefLogPath $briefLogPath
+if ($LASTEXITCODE -ne 0) {
+  throw "Brief generation failed while writing $briefJsonPath"
+}
 
 Write-Output "Saved latest fetch to $jsonPath"
 Write-Output "Saved text report to $textPath"

@@ -302,6 +302,77 @@ function getAuthorNames(authorValue) {
   return [];
 }
 
+function parsePublishedDateString(value) {
+  if (!value) return null;
+
+  const articleDateMatch = cleanText(value).match(
+    /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+(\d{1,2}),\s+(\d{4}),\s+(\d{1,2}):(\d{2})\s*(am|pm)\s*(PDT|PST|EDT|EST|CDT|CST|MDT|MST|UTC|GMT(?:[+-]\d{1,2})?)?\b/i
+  );
+
+  if (articleDateMatch) {
+    const [, rawMonth, rawDay, rawYear, rawHour, rawMinute, meridiem, rawZone] = articleDateMatch;
+    const monthNames = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+    const month = monthNames.indexOf(rawMonth.toLowerCase().replace(".", "").replace("sept", "sep"));
+    let hour = Number(rawHour) % 12;
+    if (meridiem.toLowerCase() === "pm") hour += 12;
+
+    const zoneOffsets = {
+      PDT: -7,
+      PST: -8,
+      EDT: -4,
+      EST: -5,
+      CDT: -5,
+      CST: -6,
+      MDT: -6,
+      MST: -7,
+      UTC: 0
+    };
+    const zone = (rawZone || "UTC").toUpperCase();
+    const offsetHours = zone.startsWith("GMT") ? Number(zone.replace("GMT", "")) || 0 : zoneOffsets[zone] ?? 0;
+    const utcMs = Date.UTC(Number(rawYear), month, Number(rawDay), hour - offsetHours, Number(rawMinute));
+    return Number.isNaN(utcMs) ? null : new Date(utcMs).toISOString();
+  }
+
+  const normalized = cleanText(value)
+    .replace(/\bPDT\b/i, "-07:00")
+    .replace(/\bPST\b/i, "-08:00")
+    .replace(/\bEDT\b/i, "-04:00")
+    .replace(/\bEST\b/i, "-05:00")
+    .replace(/\bCDT\b/i, "-05:00")
+    .replace(/\bCST\b/i, "-06:00")
+    .replace(/\bMDT\b/i, "-06:00")
+    .replace(/\bMST\b/i, "-07:00")
+    .replace(/\s+/g, " ");
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function extractPublishedAtFromDocument(document) {
+  const selectors = [
+    'meta[property="article:published_time"]',
+    'meta[name="article:published_time"]',
+    'meta[itemprop="datePublished"]',
+    'time[datetime]'
+  ];
+
+  for (const selector of selectors) {
+    const element = document.querySelector(selector);
+    const rawValue = element?.getAttribute("content") || element?.getAttribute("datetime");
+    const parsed = parsePublishedDateString(rawValue);
+    if (parsed) return parsed;
+  }
+
+  return null;
+}
+
+function extractPublishedAtFromText(articleText) {
+  const text = cleanText(articleText).slice(0, 2500);
+  const match = text.match(
+    /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+\d{1,2},\s+\d{4},\s+\d{1,2}:\d{2}\s*(?:am|pm)\s*(?:PDT|PST|EDT|EST|CDT|CST|MDT|MST|UTC|GMT(?:[+-]\d{1,2})?)?\b/i
+  );
+  return parsePublishedDateString(match?.[0]);
+}
+
 function extractArticleMetadata(html, pageUrl, articleText) {
   const dom = new JSDOM(html, { url: pageUrl });
   const jsonLdObjects = parseJsonLdObjects(dom.window.document);
@@ -316,7 +387,10 @@ function extractArticleMetadata(html, pageUrl, articleText) {
       : newsArticle.articleSection
     : null;
   const authors = [...new Set(getAuthorNames(newsArticle?.author))];
-  const publishedAtIso = newsArticle?.datePublished || null;
+  const publishedAtIso =
+    parsePublishedDateString(newsArticle?.datePublished) ||
+    extractPublishedAtFromDocument(dom.window.document) ||
+    extractPublishedAtFromText(articleText);
   const modifiedAtIso = newsArticle?.dateModified || null;
 
   return {
@@ -331,10 +405,30 @@ function extractArticleMetadata(html, pageUrl, articleText) {
   };
 }
 
+async function waitForArticleReadiness(page) {
+  await page
+    .waitForFunction(
+      () => {
+        const title = document.title || "";
+        const articleText = document.querySelector("article")?.innerText || "";
+        const bodyText = document.body?.innerText || "";
+        const jsonLdHasDate = Array.from(document.querySelectorAll('script[type="application/ld+json"]')).some((script) =>
+          /"datePublished"\s*:/.test(script.textContent || "")
+        );
+        const hasArticleTitle = title && title !== "The Information";
+        return hasArticleTitle && (jsonLdHasDate || articleText.length > 500 || bodyText.length > 1500);
+      },
+      { timeout: ARTICLE_LOAD_DELAY_MS + POST_OPEN_DELAY_MAX_MS }
+    )
+    .catch(() => null);
+}
+
 function scoreLink(text, href) {
   const haystack = `${text} ${href}`.toLowerCase();
   let score = 0;
   if (haystack.includes("/articles/")) score += 4;
+  if (haystack.includes("/briefings/")) score += 4;
+  if (haystack.includes("/newsletters/")) score += 4;
   if (haystack.includes("briefing")) score += 2;
   if (haystack.includes("analysis")) score += 1;
   if (haystack.includes("save 25%")) score -= 10;
@@ -343,6 +437,11 @@ function scoreLink(text, href) {
   if (haystack.includes("#comments-section")) score -= 10;
   if (text.trim().length <= 2) score -= 5;
   return score;
+}
+
+function isArticleLikePath(url) {
+  const segments = getPathSegments(url);
+  return ["articles", "briefings", "newsletters"].includes(segments[0]);
 }
 
 async function readPageState(page) {
@@ -389,7 +488,7 @@ function pickArticleLinks(candidates) {
       const canonicalUrl = canonicalizeUrl(item.href);
       if (!clickUrl || !canonicalUrl) return null;
       if (!clickUrl.includes("theinformation.com")) return null;
-      if (!clickUrl.includes("/articles/")) return null;
+      if (!isArticleLikePath(clickUrl)) return null;
       if (seen.has(canonicalUrl)) return null;
       seen.add(canonicalUrl);
       return {
@@ -464,6 +563,20 @@ function isLikelyValidArticleCapture(result, expectedCanonicalUrl) {
   if (!text || text.length < 280) return false;
   if (isClearlyHomepageLike(text, title, result.url)) return false;
   return true;
+}
+
+function buildPageMismatchMessage(result, expectedCanonicalUrl) {
+  const details = {
+    expected: expectedCanonicalUrl,
+    actual: result.url || null,
+    canonical: result.canonicalUrl || null,
+    title: result.title || null,
+    publishedDateKey: result.publishedDateKey || null,
+    textLength: cleanText(result.text).length,
+    issues: result.issues || [],
+    navigationMode: result.navigationMode || null
+  };
+  return `page_mismatch:${JSON.stringify(details)}`;
 }
 
 function chooseBetterArticleRecord(existing, incoming) {
@@ -560,6 +673,7 @@ async function fetchArticleFromHome(page, item) {
     }
 
     await delay(ARTICLE_LOAD_DELAY_MS);
+    await waitForArticleReadiness(page);
     await maybeLightScroll(page);
     await delayBetween(POST_OPEN_DELAY_MIN_MS, POST_OPEN_DELAY_MAX_MS);
 
@@ -596,6 +710,7 @@ async function fetchArticleFromHome(page, item) {
       navigationMode = "direct_goto_retry";
       await page.goto(item.canonicalUrl, { waitUntil: "domcontentloaded", timeout: 45000 }).catch(() => null);
       await delay(ARTICLE_LOAD_DELAY_MS);
+      await waitForArticleReadiness(page);
       await maybeLightScroll(page);
       await delayBetween(POST_OPEN_DELAY_MIN_MS, POST_OPEN_DELAY_MAX_MS);
 
@@ -653,7 +768,7 @@ async function fetchArticleFromHome(page, item) {
         };
       }
 
-      throw new Error(`page_mismatch:${item.canonicalUrl}`);
+      throw new Error(buildPageMismatchMessage(result, item.canonicalUrl));
     }
 
     if (!hasCloudflareIssue || attempt > ARTICLE_NAV_RETRIES) {
@@ -674,8 +789,10 @@ function shouldIncludeArticle(article, coverageWindow) {
 export {
   cleanText,
   getArticleSlug,
+  extractArticleMetadata,
   isClearlyHomepageLike,
-  isLikelyValidArticleCapture
+  isLikelyValidArticleCapture,
+  pickArticleLinks
 };
 
 async function main() {

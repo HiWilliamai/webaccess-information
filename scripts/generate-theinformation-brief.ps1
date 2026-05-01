@@ -6,7 +6,9 @@ param(
   [string]$BriefJsonPath = "D:\codex\webaccess\output\manual\theinformation-brief.json",
   [string]$BriefTextPath = "D:\codex\webaccess\output\manual\theinformation-brief.txt",
   [string]$BriefHtmlPath = "D:\codex\webaccess\output\manual\theinformation-brief.html",
-  [string]$BriefLogPath = "D:\codex\webaccess\output\manual\theinformation-brief-run.log"
+  [string]$BriefLogPath = "D:\codex\webaccess\output\manual\theinformation-brief-run.log",
+  [string]$BriefModel = "gpt-5.5",
+  [int]$MaxBriefAttempts = 2
 )
 
 $ErrorActionPreference = "Stop"
@@ -51,6 +53,10 @@ if (!(Test-Path $schemaPath)) {
   throw "Schema file not found at $schemaPath"
 }
 
+if ($MaxBriefAttempts -lt 1) {
+  throw "MaxBriefAttempts must be at least 1"
+}
+
 $codexPath = powershell -ExecutionPolicy Bypass -File (Join-Path $root "scripts\ensure-codex-cli.ps1")
 $codexPath = ($codexPath | Select-Object -Last 1).Trim()
 
@@ -70,29 +76,63 @@ if (Test-Path $tempLogPath) {
   Remove-Item $tempLogPath -Force
 }
 
+foreach ($outputPath in @($BriefJsonPath, $BriefTextPath, $BriefHtmlPath)) {
+  if (Test-Path $outputPath) {
+    Remove-Item $outputPath -Force
+  }
+}
+
 $previousErrorActionPreference = $ErrorActionPreference
-$ErrorActionPreference = "Continue"
-$executionOutput =
-  $promptText |
-    & $codexPath `
-      --dangerously-bypass-approvals-and-sandbox `
-      -m gpt-5.4 `
-      -c reasoning_effort='"high"' `
-      exec `
-      -C $root `
-      --skip-git-repo-check `
-      --color never `
-      --output-schema $schemaPath `
-      --output-last-message $BriefJsonPath `
-      - 2>&1
+$allExecutionOutput = @()
+$codexExitCode = 1
+
+for ($attempt = 1; $attempt -le $MaxBriefAttempts; $attempt++) {
+  if (Test-Path $BriefJsonPath) {
+    Remove-Item $BriefJsonPath -Force
+  }
+
+  $allExecutionOutput += "Codex brief generation attempt $attempt of $MaxBriefAttempts with model $BriefModel."
+  $ErrorActionPreference = "Continue"
+  $executionOutput =
+    $promptText |
+      & $codexPath `
+        --dangerously-bypass-approvals-and-sandbox `
+        -m $BriefModel `
+        -c reasoning_effort='"high"' `
+        exec `
+        -C $root `
+        --skip-git-repo-check `
+        --color never `
+        --output-schema $schemaPath `
+        --output-last-message $BriefJsonPath `
+        - 2>&1
+  $codexExitCode = $LASTEXITCODE
+  $ErrorActionPreference = $previousErrorActionPreference
+
+  $allExecutionOutput += $executionOutput
+  $outputText = ($executionOutput | Out-String)
+  $isRetryableModelGateError = $outputText -match "requires a newer version of Codex"
+
+  if ($codexExitCode -eq 0 -or !$isRetryableModelGateError -or $attempt -eq $MaxBriefAttempts) {
+    break
+  }
+
+  $allExecutionOutput += "Retrying after transient Codex model gate error."
+  Start-Sleep -Seconds 15
+}
+
 $ErrorActionPreference = $previousErrorActionPreference
 
-$executionOutput | Out-File -FilePath $tempLogPath -Encoding utf8
+$allExecutionOutput | Out-File -FilePath $tempLogPath -Encoding utf8
 
 Move-Item -LiteralPath $tempLogPath -Destination $briefLogPath -Force
 
-if ($LASTEXITCODE -ne 0) {
-  Write-Error "Codex brief generation failed. See log at $briefLogPath"
+if ($codexExitCode -ne 0) {
+  throw "Codex brief generation failed with model $BriefModel. See log at $briefLogPath"
+}
+
+if (!(Test-Path $BriefJsonPath)) {
+  throw "Codex brief generation did not write expected JSON at $BriefJsonPath. See log at $briefLogPath"
 }
 
 node (Join-Path $root "scripts\render-theinformation-brief.mjs") --input $BriefJsonPath --text-output $BriefTextPath --html-output $BriefHtmlPath | Out-Null
