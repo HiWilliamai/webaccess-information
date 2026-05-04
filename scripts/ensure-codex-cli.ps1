@@ -8,6 +8,23 @@ if (!(Test-Path $toolsDir)) {
   New-Item -ItemType Directory -Path $toolsDir | Out-Null
 }
 
+function Get-CodexCliVersion {
+  param(
+    [string]$Path
+  )
+
+  try {
+    $versionText = (& $Path --version 2>$null | Select-Object -First 1)
+    if ($versionText -match "(\d+)\.(\d+)\.(\d+)(?:-alpha\.(\d+))?") {
+      $alphaVersion = if ($Matches[4]) { [int]$Matches[4] } else { 9999 }
+      return [version]::new([int]$Matches[1], [int]$Matches[2], [int]$Matches[3], $alphaVersion)
+    }
+  } catch {
+  }
+
+  return $null
+}
+
 $candidatePaths = @()
 
 try {
@@ -18,9 +35,18 @@ try {
 } catch {
 }
 
+if (Test-Path $env:LOCALAPPDATA) {
+  $localPackageCandidates =
+    Get-ChildItem -Path (Join-Path $env:LOCALAPPDATA "Packages") -Directory -Filter "OpenAI.Codex_*" -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    ForEach-Object { Join-Path $_.FullName "LocalCache\Local\OpenAI\Codex\bin\codex.exe" }
+  $candidatePaths += $localPackageCandidates
+}
+
 $candidatePaths += @(
+  (Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\codex.exe"),
   (Join-Path $env:USERPROFILE ".codex\.sandbox-bin\codex.exe"),
-  (Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\codex.exe")
+  $targetPath
 )
 
 $windowsAppsRoot = "C:\Program Files\WindowsApps"
@@ -32,14 +58,28 @@ if (Test-Path $windowsAppsRoot) {
   $candidatePaths += $windowsAppsCandidates
 }
 
-$sourcePath = $candidatePaths | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+$sourceCandidate =
+  $candidatePaths |
+    Select-Object -Unique |
+    Where-Object { $_ -and (Test-Path $_) } |
+    ForEach-Object {
+      [PSCustomObject]@{
+        Path = $_
+        Version = Get-CodexCliVersion -Path $_
+      }
+    } |
+    Where-Object { $null -ne $_.Version } |
+    Sort-Object Version -Descending |
+    Select-Object -First 1
+
+$sourcePath = if ($sourceCandidate) { $sourceCandidate.Path } else { $null }
 
 if (!(Test-Path $targetPath)) {
   if (!$sourcePath) {
     throw "Could not locate Codex CLI from any known path."
   }
   Copy-Item $sourcePath $targetPath -Force
-} elseif ($sourcePath) {
+} elseif ($sourcePath -and ((Resolve-Path $sourcePath).Path -ine (Resolve-Path $targetPath).Path)) {
   $sourceInfo = Get-Item $sourcePath
   $targetInfo = Get-Item $targetPath
   $shouldCopy = ($sourceInfo.Length -ne $targetInfo.Length) -or ($sourceInfo.LastWriteTimeUtc -gt $targetInfo.LastWriteTimeUtc)

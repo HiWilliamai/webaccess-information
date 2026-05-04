@@ -20,6 +20,13 @@ if (!(Test-Path $OutputDir)) {
 
 $env:THE_INFORMATION_TIMEZONE = "Asia/Shanghai"
 $env:THE_INFORMATION_LOOKBACK_DAYS = "1"
+if ((Resolve-Path $OutputDir).Path -ieq (Join-Path $root "output\manual")) {
+  $env:THE_INFORMATION_CONSERVATIVE_EARLY_STOP = "true"
+  $env:THE_INFORMATION_EARLY_STOP_MIN_COMPLETED_ARTICLES = "10"
+  $env:THE_INFORMATION_EARLY_STOP_OLDER_ARTICLE_STREAK = "4"
+} else {
+  $env:THE_INFORMATION_CONSERVATIVE_EARLY_STOP = "false"
+}
 powershell -ExecutionPolicy Bypass -File (Join-Path $root "scripts\start-chrome-debug.ps1")
 node (Join-Path $root "scripts\fetch-theinformation.mjs") --output $jsonPath | Out-Null
 if ($LASTEXITCODE -ne 0) {

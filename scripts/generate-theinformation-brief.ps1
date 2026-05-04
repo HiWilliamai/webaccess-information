@@ -64,6 +64,9 @@ if (!(Test-Path $codexPath)) {
   throw "Local Codex CLI not available at $codexPath"
 }
 
+$codexVersion = & $codexPath --version
+$codexVersion = ($codexVersion | Select-Object -First 1).Trim()
+
 $promptText = Get-Content -Raw $promptPath
 $relativeInputJsonPath = Get-WorkspaceRelativePath -BasePath $root -TargetPath $InputJsonPath
 $relativeInputTextPath = Get-WorkspaceRelativePath -BasePath $root -TargetPath $InputTextPath
@@ -84,6 +87,7 @@ foreach ($outputPath in @($BriefJsonPath, $BriefTextPath, $BriefHtmlPath)) {
 
 $previousErrorActionPreference = $ErrorActionPreference
 $allExecutionOutput = @()
+$allExecutionOutput += "Using Codex CLI at $codexPath ($codexVersion)."
 $codexExitCode = 1
 
 for ($attempt = 1; $attempt -le $MaxBriefAttempts; $attempt++) {

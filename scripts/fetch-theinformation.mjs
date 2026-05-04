@@ -26,6 +26,9 @@ const MICRO_PAUSE_MAX_MS = Number(process.env.THE_INFORMATION_MICRO_PAUSE_MAX_MS
 const LIGHT_SCROLL_STEPS = Number(process.env.THE_INFORMATION_LIGHT_SCROLL_STEPS || "2");
 const MAX_CONSECUTIVE_BLOCKED = Number(process.env.THE_INFORMATION_MAX_CONSECUTIVE_BLOCKED || "2");
 const ALLOW_DIRECT_GOTO_FALLBACK = process.env.THE_INFORMATION_ALLOW_DIRECT_GOTO_FALLBACK !== "false";
+const CONSERVATIVE_EARLY_STOP_ENABLED = process.env.THE_INFORMATION_CONSERVATIVE_EARLY_STOP === "true";
+const EARLY_STOP_MIN_COMPLETED_ARTICLES = Number(process.env.THE_INFORMATION_EARLY_STOP_MIN_COMPLETED_ARTICLES || "10");
+const EARLY_STOP_OLDER_ARTICLE_STREAK = Number(process.env.THE_INFORMATION_EARLY_STOP_OLDER_ARTICLE_STREAK || "4");
 
 const SUSPENDED_MARKER = "Your account has been suspended";
 const CLOUDFLARE_MARKERS = ["Just a moment...", "Please wait...", "执行安全验证", "请稍候"];
@@ -786,13 +789,50 @@ function shouldIncludeArticle(article, coverageWindow) {
   return article.publishedDateKey >= coverageWindow.cutoffDateKey;
 }
 
+function isChallengeOrErrorArticle(article) {
+  const issues = Array.isArray(article.issues) ? article.issues : [];
+  return issues.some((issue) => issue === "cloudflare_challenge" || issue.startsWith("fetch_error"));
+}
+
+function isValidOlderArticleForEarlyStop(article, coverageWindow) {
+  if (!article.publishedDateKey) return false;
+  if (isChallengeOrErrorArticle(article)) return false;
+  return article.publishedDateKey < coverageWindow.cutoffDateKey;
+}
+
+function shouldStopAfterOlderArticleStreak(fetchedArticles, coverageWindow, options = {}) {
+  const minCompletedArticles = Math.max(1, Number(options.minCompletedArticles || EARLY_STOP_MIN_COMPLETED_ARTICLES));
+  const olderArticleStreak = Math.max(1, Number(options.olderArticleStreak || EARLY_STOP_OLDER_ARTICLE_STREAK));
+
+  if (fetchedArticles.length < minCompletedArticles) return false;
+
+  const hasCoverageMatchedArticle = fetchedArticles.some(
+    (article) =>
+      article.publishedDateKey &&
+      article.publishedDateKey >= coverageWindow.cutoffDateKey &&
+      !isChallengeOrErrorArticle(article)
+  );
+  if (!hasCoverageMatchedArticle) return false;
+
+  let streak = 0;
+  for (let index = fetchedArticles.length - 1; index >= 0; index -= 1) {
+    const article = fetchedArticles[index];
+    if (!isValidOlderArticleForEarlyStop(article, coverageWindow)) break;
+    streak += 1;
+    if (streak >= olderArticleStreak) return true;
+  }
+
+  return false;
+}
+
 export {
   cleanText,
   getArticleSlug,
   extractArticleMetadata,
   isClearlyHomepageLike,
   isLikelyValidArticleCapture,
-  pickArticleLinks
+  pickArticleLinks,
+  shouldStopAfterOlderArticleStreak
 };
 
 async function main() {
@@ -863,6 +903,14 @@ async function main() {
           );
           break;
         }
+
+        if (CONSERVATIVE_EARLY_STOP_ENABLED && shouldStopAfterOlderArticleStreak(fetchedArticles, coverageWindow)) {
+          stopReason = `early_stop_after_${EARLY_STOP_OLDER_ARTICLE_STREAK}_older_articles_before_${coverageWindow.cutoffDateKey}`;
+          unprocessedArticles.push(
+            ...articles.slice(index + 1).map((remainingItem) => buildUnprocessedArticle(remainingItem, stopReason))
+          );
+          break;
+        }
       } catch (error) {
         consecutiveBlockedArticles = 0;
         const message = error instanceof Error ? error.message : String(error);
@@ -925,6 +973,9 @@ async function main() {
       reusedExistingTab: reused,
       maxCandidates: MAX_CANDIDATES > 0 ? MAX_CANDIDATES : null,
       allowDirectGotoFallback: ALLOW_DIRECT_GOTO_FALLBACK,
+      conservativeEarlyStopEnabled: CONSERVATIVE_EARLY_STOP_ENABLED,
+      earlyStopMinCompletedArticles: EARLY_STOP_MIN_COMPLETED_ARTICLES,
+      earlyStopOlderArticleStreak: EARLY_STOP_OLDER_ARTICLE_STREAK,
       conservativeMode: true,
       coverageWindow,
       candidateCount: articles.length,

@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { extractArticleMetadata, isLikelyValidArticleCapture, pickArticleLinks } from "../scripts/fetch-theinformation.mjs";
+import {
+  extractArticleMetadata,
+  isLikelyValidArticleCapture,
+  pickArticleLinks,
+  shouldStopAfterOlderArticleStreak
+} from "../scripts/fetch-theinformation.mjs";
 
 test("keeps article-like newsletter and briefing links as candidates", () => {
   const links = pickArticleLinks([
@@ -86,4 +91,81 @@ test("extracts publication time from NewsArticle JSON-LD", () => {
   assert.equal(metadata.publishedAtIso, "2026-04-27T13:00:42.000Z");
   assert.equal(metadata.section, "technology");
   assert.deepEqual(metadata.authors, ["Catherine Perloff"]);
+});
+
+test("stops after four valid older articles once enough current coverage exists", () => {
+  const coverageWindow = {
+    cutoffDateKey: "2026-04-30"
+  };
+  const fetchedArticles = [
+    ...Array.from({ length: 6 }, (_, index) => ({
+      title: `Current article ${index + 1}`,
+      publishedDateKey: "2026-05-01",
+      issues: []
+    })),
+    ...Array.from({ length: 4 }, (_, index) => ({
+      title: `Older article ${index + 1}`,
+      publishedDateKey: "2026-04-29",
+      issues: [],
+      text: "Full article body"
+    }))
+  ];
+
+  assert.equal(
+    shouldStopAfterOlderArticleStreak(fetchedArticles, coverageWindow, {
+      minCompletedArticles: 10,
+      olderArticleStreak: 4
+    }),
+    true
+  );
+});
+
+test("does not stop before the minimum completed article count", () => {
+  const coverageWindow = {
+    cutoffDateKey: "2026-04-30"
+  };
+  const fetchedArticles = [
+    { title: "Current article", publishedDateKey: "2026-05-01", issues: [] },
+    ...Array.from({ length: 4 }, (_, index) => ({
+      title: `Older article ${index + 1}`,
+      publishedDateKey: "2026-04-29",
+      issues: [],
+      text: "Full article body"
+    }))
+  ];
+
+  assert.equal(
+    shouldStopAfterOlderArticleStreak(fetchedArticles, coverageWindow, {
+      minCompletedArticles: 10,
+      olderArticleStreak: 4
+    }),
+    false
+  );
+});
+
+test("does not count challenge, error, or missing-date articles toward older streak", () => {
+  const coverageWindow = {
+    cutoffDateKey: "2026-04-30"
+  };
+  const fetchedArticles = [
+    ...Array.from({ length: 6 }, (_, index) => ({
+      title: `Current article ${index + 1}`,
+      publishedDateKey: "2026-05-01",
+      issues: []
+    })),
+    { title: "Older 1", publishedDateKey: "2026-04-29", issues: [] },
+    { title: "Challenge", publishedDateKey: "2026-04-29", issues: ["cloudflare_challenge"] },
+    { title: "Error", publishedDateKey: "2026-04-29", issues: ["fetch_error"] },
+    { title: "Missing date", publishedDateKey: null, issues: [] },
+    { title: "Older 2", publishedDateKey: "2026-04-29", issues: [] },
+    { title: "Older 3", publishedDateKey: "2026-04-29", issues: [] }
+  ];
+
+  assert.equal(
+    shouldStopAfterOlderArticleStreak(fetchedArticles, coverageWindow, {
+      minCompletedArticles: 10,
+      olderArticleStreak: 4
+    }),
+    false
+  );
 });

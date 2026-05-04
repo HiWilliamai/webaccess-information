@@ -12,3 +12,10 @@ test("brief generation retries transient gpt model gate failures", async () => {
   assert.match(script, /for\s*\(\s*\$attempt\s*=\s*1;\s*\$attempt\s+-le\s+\$MaxBriefAttempts;/);
   assert.match(script, /Start-Sleep\s+-Seconds/);
 });
+
+test("brief generation logs selected Codex CLI path and version", async () => {
+  const script = await readFile(scriptPath, "utf8");
+
+  assert.match(script, /\$codexVersion\s*=\s*&\s*\$codexPath\s+--version/);
+  assert.match(script, /Using Codex CLI at \$codexPath/);
+});
