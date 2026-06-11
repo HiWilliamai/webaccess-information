@@ -24,6 +24,7 @@ Classification rules:
 
 - Put priority full articles into `featured_articles`.
 - A full article is priority if it is marked `Exclusive`, or if it is materially related to OpenAI, Anthropic, Claude, ChatGPT, Codex, AI models, AI infrastructure, chips, GPUs, data centers, cloud, model routing, developer tooling, AI agents, enterprise AI, or foundational AI platforms.
+- Exclusive full articles must appear before non-Exclusive full articles inside `featured_articles`.
 - If an article is both `Exclusive` and AI-related, treat it as especially important and make the analysis more detailed than normal.
 - Put other full articles into `other_articles`.
 - If an article is incomplete, teaser-like, or clearly lacks enough full-body content for reliable article-level analysis, put it into `partial_articles`.
@@ -67,6 +68,7 @@ Depth rules:
 
 - For `featured_articles`, prefer 3 to 6 subsections in `key_data_sections`.
 - For `featured_articles`, prefer 3 to 5 subsections in `insight_sections`.
+- Exclusive articles must use finer granularity than ordinary articles: prefer 5 to 6 `key_data_sections` and 4 to 5 `insight_sections` whenever the source supports it.
 - For especially important `Exclusive` and AI-related stories, use the upper end of the detail range whenever the source supports it.
 - For `other_articles`, prefer 2 to 4 subsections for each grouped section.
 
@@ -76,7 +78,7 @@ Field rules:
 - `title_translation` must be a concise Chinese translation of the English title, suitable for displaying directly below the original title.
 - `publication_time` should use the readable publication time from the source files whenever available.
 - `today_status_summary` must be an array of concise Chinese lines summarizing success status, omissions, blocked items, incomplete items, and whether there are especially important priority stories.
-- For `partial_articles`, `blocked_articles`, and `unprocessed_articles`, `issue_summary` must explain the problem in Chinese, and `missing_details` must be an array of Chinese bullet texts explaining what is missing or why full analysis is not possible.
+- For `partial_articles`, `blocked_articles`, and `unprocessed_articles`, include `title_translation` as a concise Chinese translation of the English title, `issue_summary` must explain the problem in Chinese, and `missing_details` must be an array of Chinese bullet texts explaining what is missing or why full analysis is not possible.
 
 Style rules:
 

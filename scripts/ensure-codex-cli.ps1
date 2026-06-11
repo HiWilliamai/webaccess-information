@@ -27,6 +27,23 @@ function Get-CodexCliVersion {
 
 $candidatePaths = @()
 
+$configPath = Join-Path $env:USERPROFILE ".codex\config.toml"
+if (Test-Path $configPath) {
+  $configCliPathLine = Select-String -LiteralPath $configPath -Pattern '^\s*CODEX_CLI_PATH\s*=\s*[''"](.+?)[''"]' -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($configCliPathLine -and $configCliPathLine.Matches.Count -gt 0) {
+    $candidatePaths += $configCliPathLine.Matches[0].Groups[1].Value
+  }
+}
+
+$localCodexBinRoot = Join-Path $env:LOCALAPPDATA "OpenAI\Codex\bin"
+if (Test-Path $localCodexBinRoot) {
+  $localCodexBinCandidates =
+    Get-ChildItem -Path $localCodexBinRoot -Directory -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    ForEach-Object { Join-Path $_.FullName "codex.exe" }
+  $candidatePaths += $localCodexBinCandidates
+}
+
 try {
   $command = Get-Command codex -ErrorAction Stop
   if ($command.Source) {

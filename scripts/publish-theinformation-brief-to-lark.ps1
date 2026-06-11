@@ -18,7 +18,8 @@ param(
   [int]$MarkdownChunkSize = 12000,
   [string]$ExistingDetailDocId = "",
   [string]$ExistingDetailDocUrl = "",
-  [switch]$AppendIndexEntryForExisting
+  [switch]$AppendIndexEntryForExisting,
+  [switch]$ReplaceExistingDetailDoc
 )
 
 $ErrorActionPreference = "Stop"
@@ -92,8 +93,15 @@ function Invoke-LarkCliWithRetry {
 
   $maxAttempts = 3
   for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-    $result = & lark-cli @CliArgs 2>&1
-    $exitCode = $LASTEXITCODE
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+      $ErrorActionPreference = "Continue"
+      $result = & lark-cli @CliArgs 2>&1
+      $exitCode = $LASTEXITCODE
+    } finally {
+      $ErrorActionPreference = $previousErrorActionPreference
+    }
+
     if ($exitCode -eq 0) {
       return $result
     }
@@ -101,7 +109,10 @@ function Invoke-LarkCliWithRetry {
     $resultText = [string]::Join("`n", @($result | ForEach-Object { [string]$_ }))
     $isRetryable = $resultText -match "TLS handshake timeout|MCP transport failed|network"
     if (!$isRetryable -or $attempt -eq $maxAttempts) {
-      throw "lark-cli $Description failed"
+      if ($resultText.Length -gt 4000) {
+        $resultText = $resultText.Substring(0, 4000) + "`n...<truncated>"
+      }
+      throw "lark-cli $Description failed: $resultText"
     }
 
     Start-Sleep -Seconds (10 * $attempt)
@@ -113,7 +124,7 @@ function Invoke-LarkFetchDocumentMarkdown {
     [string]$Doc
   )
 
-  $result = Invoke-LarkCliWithRetry -CliArgs @("docs", "+fetch", "--as", $Identity, "--doc", $Doc, "--limit", "200000", "--jq", ".data.markdown") -Description "docs +fetch for '$Doc'"
+  $result = Invoke-LarkCliWithRetry -CliArgs @("docs", "+fetch", "--api-version", "v2", "--as", $Identity, "--doc", $Doc, "--limit", "200000", "--jq", ".data.document.content") -Description "docs +fetch for '$Doc'"
   return [string]::Join("`n", @($result | ForEach-Object { [string]$_ }))
 }
 
@@ -184,6 +195,12 @@ function Get-LarkDocumentId {
     }
   }
 
+  foreach ($propertyName in @("document", "file")) {
+    if ($null -ne $Document.$propertyName) {
+      return Get-LarkDocumentId -Document $Document.$propertyName -Description $Description
+    }
+  }
+
   throw "Could not resolve Lark document id from $Description"
 }
 
@@ -199,7 +216,50 @@ function Get-LarkDocumentUrl {
     }
   }
 
+  foreach ($propertyName in @("document", "file")) {
+    if ($null -ne $Document.$propertyName) {
+      return Get-LarkDocumentUrl -Document $Document.$propertyName -DocId $DocId
+    }
+  }
+
   return "https://www.feishu.cn/docx/$DocId"
+}
+
+function ConvertTo-LarkV2UpdateCommand {
+  param(
+    [string]$Mode
+  )
+
+  switch ($Mode) {
+    "append" { return "append" }
+    "overwrite" { return "overwrite" }
+    "replace_all" { return "overwrite" }
+    default { return $Mode }
+  }
+}
+
+function ConvertTo-LarkV2CreateContent {
+  param(
+    [string]$Title,
+    [string]$Markdown
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Title)) {
+    return $Markdown
+  }
+
+  $encodedTitle = [System.Net.WebUtility]::HtmlEncode($Title)
+  return "<title>$encodedTitle</title>`n$Markdown"
+}
+
+function Move-LarkDocumentToDestination {
+  param(
+    [string]$DocId
+  )
+
+  if ($DestinationType -eq "folder-token" -and ![string]::IsNullOrWhiteSpace($DestinationToken)) {
+    Invoke-LarkCliWithRetry -CliArgs @("drive", "+move", "--as", $Identity, "--file-token", $DocId, "--type", "docx", "--folder-token", $DestinationToken) -Description "drive +move for '$DocId'" | Out-Null
+  }
 }
 
 $payloadJson = node (Join-Path $root "scripts\render-theinformation-lark-publish-data.mjs") `
@@ -260,12 +320,13 @@ function Invoke-LarkCreateDocument {
   )
 
   $chunks = @(Split-MarkdownContent -Markdown $Markdown)
-  $args = @("docs", "+create", "--as", $Identity, "--title", $Title, "--markdown", $chunks[0])
+  $initialContent = ConvertTo-LarkV2CreateContent -Title $Title -Markdown $chunks[0]
+  $args = @("docs", "+create", "--api-version", "v2", "--as", $Identity, "--doc-format", "markdown", "--content", $initialContent)
 
   switch ($DestinationType) {
-    "folder-token" { $args += @("--folder-token", $DestinationToken) }
-    "wiki-node" { $args += @("--wiki-node", $DestinationToken) }
-    "wiki-space" { $args += @("--wiki-space", $DestinationToken) }
+    "folder-token" { }
+    "wiki-node" { throw "docs +create API v2 does not support wiki-node destinations" }
+    "wiki-space" { throw "docs +create API v2 does not support wiki-space destinations" }
     "" { }
     default { throw "Unsupported destination type: $DestinationType" }
   }
@@ -281,6 +342,8 @@ function Invoke-LarkCreateDocument {
   }
   $createdDocId = Get-LarkDocumentId -Document $createdDoc -Description "docs +create"
   $createdDocUrl = Get-LarkDocumentUrl -Document $createdDoc -DocId $createdDocId
+
+  Move-LarkDocumentToDestination -DocId $createdDocId
 
   for ($chunkIndex = 1; $chunkIndex -lt $chunks.Count; $chunkIndex++) {
     Invoke-LarkUpdateDocument -Doc $createdDocId -Markdown $chunks[$chunkIndex] -Mode "append" | Out-Null
@@ -301,9 +364,10 @@ function Invoke-LarkUpdateDocument {
     [string]$NewTitle = ""
   )
 
-  $args = @("docs", "+update", "--as", $Identity, "--doc", $Doc, "--mode", $Mode)
+  $command = ConvertTo-LarkV2UpdateCommand -Mode $Mode
+  $args = @("docs", "+update", "--api-version", "v2", "--as", $Identity, "--doc", $Doc, "--command", $command)
   if ($Markdown -ne $null) {
-    $args += @("--markdown", $Markdown)
+    $args += @("--doc-format", "markdown", "--content", $Markdown)
   }
   if (![string]::IsNullOrWhiteSpace($NewTitle)) {
     $args += @("--new-title", $NewTitle)
@@ -317,8 +381,9 @@ function Invoke-LarkUpdateDocument {
       if (($Mode -eq "overwrite" -or $Mode -eq "replace_all") -and $chunkIndex -gt 0) {
         $chunkMode = "append"
       }
+      $chunkCommand = ConvertTo-LarkV2UpdateCommand -Mode $chunkMode
 
-      $chunkArgs = @("docs", "+update", "--as", $Identity, "--doc", $Doc, "--mode", $chunkMode, "--markdown", $chunks[$chunkIndex])
+      $chunkArgs = @("docs", "+update", "--api-version", "v2", "--as", $Identity, "--doc", $Doc, "--command", $chunkCommand, "--doc-format", "markdown", "--content", $chunks[$chunkIndex])
       if ($chunkIndex -eq 0 -and ![string]::IsNullOrWhiteSpace($NewTitle)) {
         $chunkArgs += @("--new-title", $NewTitle)
       }
@@ -408,8 +473,15 @@ if ($detailVerificationMarkers.Count -gt 0) {
 if ($null -ne $existingDetailDoc -and ![string]::IsNullOrWhiteSpace($existingDetailDoc.docId)) {
   $detailDocId = $existingDetailDoc.docId
   $detailDocUrl = $existingDetailDoc.docUrl
-  Assert-LarkDocumentContainsMarkers -Doc $detailDocId -Markers $detailMarkersToVerify -Description "existing detail content"
-  $detailDocAction = "reuse"
+  if ($ReplaceExistingDetailDoc) {
+    $replacementMarkdown = ConvertTo-LarkV2CreateContent -Title $payload.detailTitle -Markdown $payload.detailMarkdown
+    Invoke-LarkUpdateDocument -Doc $detailDocId -Markdown $replacementMarkdown -Mode "overwrite" | Out-Null
+    Move-LarkDocumentToDestination -DocId $detailDocId
+    $detailDocAction = "replace"
+  } else {
+    Assert-LarkDocumentContainsMarkers -Doc $detailDocId -Markers $detailMarkersToVerify -Description "existing detail content"
+    $detailDocAction = "reuse"
+  }
 } else {
   $detailCreateResult = Invoke-LarkCreateDocument -Title $payload.detailTitle -Markdown $payload.detailMarkdown
   $detailDocId = $detailCreateResult.doc_id
@@ -420,11 +492,16 @@ Assert-LarkDocumentContainsMarkers -Doc $detailDocId -Markers $detailMarkersToVe
 
 $appendedIndexEntry = $false
 if ($detailDocAction -eq "create" -or $detailDocAction -eq "replace" -or $AppendIndexEntryForExisting) {
-  $indexEntryMarkdown = [string]$payload.indexEntryMarkdown
-  $indexEntryMarkdown = $indexEntryMarkdown.Replace("{{DOC_URL}}", $detailDocUrl)
-  Invoke-LarkUpdateDocument -Doc $resolvedIndexDocId -Mode "append" -Markdown ("`n`n" + $indexEntryMarkdown) | Out-Null
-  $appendedIndexEntry = $true
-  Assert-LarkDocumentContainsMarkers -Doc $resolvedIndexDocId -Markers @($payload.reportDateKey, $payload.detailTitle) -Description "index entry"
+  $indexMarkers = @($payload.reportDateKey, $payload.detailTitle)
+  $indexMarkdown = Invoke-LarkFetchDocumentMarkdown -Doc $resolvedIndexDocId
+  $missingIndexMarkers = @($indexMarkers | Where-Object { $indexMarkdown.IndexOf($_, [System.StringComparison]::Ordinal) -lt 0 })
+  if ($missingIndexMarkers.Count -gt 0) {
+    $indexEntryMarkdown = [string]$payload.indexEntryMarkdown
+    $indexEntryMarkdown = $indexEntryMarkdown.Replace("{{DOC_URL}}", $detailDocUrl)
+    Invoke-LarkUpdateDocument -Doc $resolvedIndexDocId -Mode "append" -Markdown ("`n`n" + $indexEntryMarkdown) | Out-Null
+    $appendedIndexEntry = $true
+  }
+  Assert-LarkDocumentContainsMarkers -Doc $resolvedIndexDocId -Markers $indexMarkers -Description "index entry"
 }
 
 $nextState = @{

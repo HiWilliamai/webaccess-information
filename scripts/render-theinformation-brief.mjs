@@ -193,7 +193,7 @@ function renderArticleHtml(article) {
   const titleTranslation = normalizeText(article.title_translation);
 
   return `
-    <article class="article-card">
+    <article class="article-card" data-title-translation="${escapeHtml(titleTranslation)}">
       <h2>${escapeHtml(normalizeText(article.title) || "未提供标题")}</h2>
       ${titleTranslation ? `<p class="title-translation">${escapeHtml(titleTranslation)}</p>` : ""}
       <div class="meta-grid">
@@ -220,8 +220,10 @@ function renderArticleHtml(article) {
 }
 
 function renderIssueArticleHtml(item) {
+  const titleTranslation = normalizeText(item.title_translation);
+
   return `
-    <article class="article-card compact">
+    <article class="article-card compact" data-title-translation="${escapeHtml(titleTranslation)}">
       <h2>${escapeHtml(normalizeText(item.title) || "未提供标题")}</h2>
       <div class="meta-grid">
         ${renderMetaGridHtml(renderIssueMetadataLines(item))}
@@ -266,6 +268,9 @@ function renderHtml(data) {
         --shadow: 0 20px 46px rgba(74, 48, 18, 0.12);
       }
       * { box-sizing: border-box; }
+      html {
+        scroll-behavior: smooth;
+      }
       body {
         margin: 0;
         font-family: "Georgia", "Songti SC", "Noto Serif SC", "Times New Roman", serif;
@@ -273,6 +278,81 @@ function renderHtml(data) {
         background:
           radial-gradient(circle at top left, rgba(143, 50, 24, 0.12), transparent 28%),
           linear-gradient(180deg, #fbf8f2 0%, var(--bg) 100%);
+      }
+      .article-nav {
+        position: fixed;
+        top: 136px;
+        left: clamp(14px, 1.6vw, 30px);
+        z-index: 10;
+        width: 300px;
+        max-height: calc(100vh - 172px);
+        overflow: auto;
+        padding: 16px;
+        border: 1px solid rgba(143, 50, 24, 0.22);
+        border-radius: 18px;
+        background: rgba(255, 253, 248, 0.72);
+        box-shadow: 0 18px 42px rgba(74, 48, 18, 0.12);
+        backdrop-filter: blur(10px);
+      }
+      .article-nav h2 {
+        margin: 0 0 12px;
+        color: var(--accent);
+        font-size: 18px;
+        line-height: 1.25;
+      }
+      .article-nav ol {
+        display: grid;
+        gap: 8px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        counter-reset: article-nav;
+      }
+      .article-nav li {
+        counter-increment: article-nav;
+      }
+      .article-nav a {
+        display: grid;
+        grid-template-columns: 22px minmax(0, 1fr);
+        gap: 8px;
+        align-items: start;
+        padding: 9px 10px;
+        border: 1px solid transparent;
+        border-radius: 12px;
+        color: var(--ink);
+        text-decoration: none;
+        line-height: 1.35;
+        transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+      }
+      .article-nav a::before {
+        content: counter(article-nav, decimal-leading-zero);
+        color: var(--accent);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+      .article-nav a:hover,
+      .article-nav a:focus-visible {
+        border-color: rgba(143, 50, 24, 0.26);
+        background: rgba(143, 50, 24, 0.08);
+        color: var(--accent);
+        outline: none;
+      }
+      .article-nav-text {
+        min-width: 0;
+      }
+      .article-nav-title {
+        display: block;
+      }
+      .article-nav-translation {
+        display: block;
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.45;
+      }
+      .article-nav a:hover .article-nav-translation,
+      .article-nav a:focus-visible .article-nav-translation {
+        color: var(--accent);
       }
       .page {
         width: min(1080px, calc(100% - 24px));
@@ -321,6 +401,7 @@ function renderHtml(data) {
         border-top: 1px solid var(--line);
         padding-top: 20px;
         margin-top: 20px;
+        scroll-margin-top: 24px;
       }
       .article-card:first-of-type {
         border-top: none;
@@ -393,9 +474,38 @@ function renderHtml(data) {
       .empty {
         color: var(--muted);
       }
+      @media (min-width: 1500px) {
+        .page {
+          margin-left: max(360px, calc((100vw - 1080px) / 2 + 44px));
+          margin-right: auto;
+        }
+      }
+      @media (max-width: 1499px) {
+        .article-nav {
+          position: static;
+          width: min(1080px, calc(100% - 24px));
+          max-height: min(38vh, 360px);
+          margin: 16px auto 0;
+        }
+        .article-nav ol {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
       @media (max-width: 720px) {
         .page {
           width: min(100% - 16px, 1080px);
+        }
+        .article-nav {
+          width: min(100% - 16px, 1080px);
+          max-height: 280px;
+          padding: 14px;
+        }
+        .article-nav ol {
+          grid-template-columns: 1fr;
+          gap: 6px;
+        }
+        .article-nav a {
+          padding: 8px;
         }
         .hero,
         .summary-panel,
@@ -413,6 +523,10 @@ function renderHtml(data) {
     </style>
   </head>
   <body>
+    <nav class="article-nav" aria-label="文章目录">
+      <h2>文章目录</h2>
+      <ol id="articleNavList"></ol>
+    </nav>
     <div class="page">
       <header class="hero">
         <h1>The Information 中文高颗粒度阅读稿</h1>
@@ -430,6 +544,46 @@ function renderHtml(data) {
       ${renderHtmlSection("被拦截文章", data.blocked_articles, renderIssueArticleHtml)}
       ${renderHtmlSection("未处理文章", data.unprocessed_articles, renderIssueArticleHtml)}
     </div>
+    <script>
+      (() => {
+        const navList = document.querySelector("#articleNavList");
+        const cards = [...document.querySelectorAll(".section-block .article-card")];
+
+        cards.forEach((card, index) => {
+          const title = card.querySelector("h2");
+          if (!title) return;
+          const translation = card.querySelector(".title-translation");
+          const heading = title.textContent.trim();
+
+          const id = \`article-\${index + 1}\`;
+          card.id = id;
+
+          const item = document.createElement("li");
+          const link = document.createElement("a");
+          link.href = \`#\${id}\`;
+
+          const textWrap = document.createElement("span");
+          textWrap.className = "article-nav-text";
+
+          const titleText = document.createElement("span");
+          titleText.className = "article-nav-title";
+          titleText.textContent = heading;
+          textWrap.appendChild(titleText);
+
+          const translatedHeading = translation?.textContent.trim() || card.dataset.titleTranslation?.trim();
+          if (translatedHeading) {
+            const translationText = document.createElement("span");
+            translationText.className = "article-nav-translation";
+            translationText.textContent = translatedHeading;
+            textWrap.appendChild(translationText);
+          }
+
+          link.appendChild(textWrap);
+          item.appendChild(link);
+          navList.appendChild(item);
+        });
+      })();
+    </script>
   </body>
 </html>`;
 }

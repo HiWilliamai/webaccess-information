@@ -15,6 +15,20 @@ test("ensure script searches the Codex app LocalCache install before stale sandb
   assert.ok(localCacheIndex < sandboxIndex);
 });
 
+test("ensure script searches current Codex app bin paths before PATH wrappers", async () => {
+  const script = await readFile(scriptPath, "utf8");
+
+  const configCliPathIndex = script.indexOf("CODEX_CLI_PATH");
+  const localCodexBinIndex = script.indexOf("OpenAI\\Codex\\bin");
+  const pathWrapperIndex = script.indexOf("Get-Command codex");
+
+  assert.notEqual(configCliPathIndex, -1);
+  assert.notEqual(localCodexBinIndex, -1);
+  assert.notEqual(pathWrapperIndex, -1);
+  assert.ok(configCliPathIndex < pathWrapperIndex);
+  assert.ok(localCodexBinIndex < pathWrapperIndex);
+});
+
 test("ensure script chooses the highest detected Codex CLI version", async () => {
   const script = await readFile(scriptPath, "utf8");
 

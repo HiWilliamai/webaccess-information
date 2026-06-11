@@ -17,5 +17,9 @@ test("publish script verifies detail and index documents after Lark writes", asy
 
   assert.match(script, /Assert-LarkDocumentContainsMarkers -Doc \$detailDocId/);
   assert.match(script, /Assert-LarkDocumentContainsMarkers -Doc \$resolvedIndexDocId/);
-  assert.match(script, /docs", "\+fetch", "--as", \$Identity, "--doc", \$Doc/);
+  assert.match(script, /docs", "\+fetch", "--api-version", "v2", "--as", \$Identity, "--doc", \$Doc[\s\S]*"\.data\.document\.content"/);
+  assert.match(script, /docs", "\+create", "--api-version", "v2", "--as", \$Identity/);
+  assert.match(script, /docs", "\+update", "--api-version", "v2", "--as", \$Identity/);
+  assert.match(script, /"--doc-format", "markdown", "--content"/);
+  assert.match(script, /"--command", \$chunkCommand/);
 });

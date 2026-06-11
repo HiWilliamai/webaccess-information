@@ -29,6 +29,10 @@ const ALLOW_DIRECT_GOTO_FALLBACK = process.env.THE_INFORMATION_ALLOW_DIRECT_GOTO
 const CONSERVATIVE_EARLY_STOP_ENABLED = process.env.THE_INFORMATION_CONSERVATIVE_EARLY_STOP === "true";
 const EARLY_STOP_MIN_COMPLETED_ARTICLES = Number(process.env.THE_INFORMATION_EARLY_STOP_MIN_COMPLETED_ARTICLES || "10");
 const EARLY_STOP_OLDER_ARTICLE_STREAK = Number(process.env.THE_INFORMATION_EARLY_STOP_OLDER_ARTICLE_STREAK || "4");
+const CLOUDFLARE_CLEAR_TIMEOUT_MS = Number(process.env.THE_INFORMATION_CLOUDFLARE_CLEAR_TIMEOUT_MS || "240000");
+const CLOUDFLARE_CLEAR_POLL_MS = Number(process.env.THE_INFORMATION_CLOUDFLARE_CLEAR_POLL_MS || "5000");
+const HOME_READY_TIMEOUT_MS = Number(process.env.THE_INFORMATION_HOME_READY_TIMEOUT_MS || "90000");
+const HOME_READY_POLL_MS = Number(process.env.THE_INFORMATION_HOME_READY_POLL_MS || "5000");
 
 const SUSPENDED_MARKER = "Your account has been suspended";
 const CLOUDFLARE_MARKERS = ["Just a moment...", "Please wait...", "执行安全验证", "请稍候"];
@@ -41,6 +45,26 @@ function getOutputPath() {
     return path.resolve(args[outputIndex + 1]);
   }
   return process.env.THE_INFORMATION_OUTPUT_PATH || DEFAULT_OUTPUT_PATH;
+}
+
+function writeFetchPayload(outputPath, payload) {
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+
+  if (payload?.ok === false) {
+    const failedOutputPath = `${outputPath}.failed.json`;
+    fs.writeFileSync(failedOutputPath, JSON.stringify(payload, null, 2));
+    return {
+      wrotePrimaryOutput: false,
+      outputPath: failedOutputPath
+    };
+  }
+
+  fs.writeFileSync(outputPath, JSON.stringify(payload, null, 2));
+  fs.rmSync(`${outputPath}.failed.json`, { force: true });
+  return {
+    wrotePrimaryOutput: true,
+    outputPath
+  };
 }
 
 function normalizeUrl(url) {
@@ -108,6 +132,251 @@ function detectPageIssues(title, bodyText) {
     issues.push("paywalled_or_teaser");
   }
   return issues;
+}
+
+function isLikelyBlockingOverlayText(text) {
+  const normalizedText = cleanText(text).toLowerCase();
+  if (!normalizedText) return false;
+
+  const mentionsUpgrade = normalizedText.includes("upgrade") || normalizedText.includes("/ month");
+  const mentionsInformationPro = normalizedText.includes("the information pro");
+  const mentionsDeepResearchPitch =
+    normalizedText.includes("ai-powered insights") && normalizedText.includes("deep research");
+
+  return mentionsUpgrade && (mentionsInformationPro || mentionsDeepResearchPitch);
+}
+
+async function dismissBlockingOverlays(page) {
+  const dismissed = await page
+    .evaluate(() => {
+      const clean = (value) =>
+        (value || "")
+          .replace(/\u00a0/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+      const isLikelyBlockingOverlayTextInPage = (value) => {
+        const normalizedText = clean(value).toLowerCase();
+        if (!normalizedText) return false;
+
+        const mentionsUpgrade = normalizedText.includes("upgrade") || normalizedText.includes("/ month");
+        const mentionsInformationPro = normalizedText.includes("the information pro");
+        const mentionsDeepResearchPitch =
+          normalizedText.includes("ai-powered insights") && normalizedText.includes("deep research");
+
+        return mentionsUpgrade && (mentionsInformationPro || mentionsDeepResearchPitch);
+      };
+      const isVisible = (element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      };
+      const overlays = Array.from(document.querySelectorAll("body *"))
+        .filter((element) => {
+          if (!isVisible(element)) return false;
+          const text = clean(element.innerText || element.textContent || "");
+          return text.length >= 40 && text.length <= 3000 && isLikelyBlockingOverlayTextInPage(text);
+        })
+        .sort((left, right) => {
+          const leftRect = left.getBoundingClientRect();
+          const rightRect = right.getBoundingClientRect();
+          return leftRect.width * leftRect.height - rightRect.width * rightRect.height;
+        });
+
+      if (overlays.length > 0) {
+        const closeModalControl = document.querySelector('[data-test="close-modal"], [data-testid="close-modal"]');
+        if (closeModalControl && isVisible(closeModalControl)) {
+          closeModalControl.click();
+          return true;
+        }
+      }
+
+      for (const overlay of overlays) {
+        const overlayRect = overlay.getBoundingClientRect();
+        const controls = Array.from(overlay.querySelectorAll("button, [role='button'], a, [aria-label], svg, div, span"))
+          .filter((element) => {
+            if (!isVisible(element)) return false;
+            const rect = element.getBoundingClientRect();
+            const label = clean(
+              element.getAttribute("aria-label") || element.getAttribute("title") || element.innerText || element.textContent || ""
+            ).toLowerCase();
+            const looksLikeCloseText = label === "x" || label === "\u00d7" || label.includes("close");
+            const isSmallTopRightControl =
+              rect.width <= 90 &&
+              rect.height <= 90 &&
+              rect.left >= overlayRect.right - 130 &&
+              rect.top <= overlayRect.top + 110;
+            return looksLikeCloseText || isSmallTopRightControl;
+          })
+          .sort((left, right) => {
+            const leftRect = left.getBoundingClientRect();
+            const rightRect = right.getBoundingClientRect();
+            return rightRect.left - leftRect.left || leftRect.top - rightRect.top;
+          });
+
+        const control = controls[0];
+        if (control) {
+          control.click();
+          return true;
+        }
+      }
+
+      return false;
+    })
+    .catch(() => false);
+
+  if (dismissed) {
+    await delayBetween(MICRO_PAUSE_MIN_MS, MICRO_PAUSE_MAX_MS);
+  }
+
+  return dismissed;
+}
+
+async function hasBlockingOverlay(page) {
+  return page
+    .evaluate(() => {
+      const clean = (value) =>
+        (value || "")
+          .replace(/\u00a0/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+      const isLikelyBlockingOverlayTextInPage = (value) => {
+        const normalizedText = clean(value).toLowerCase();
+        if (!normalizedText) return false;
+
+        const mentionsUpgrade = normalizedText.includes("upgrade") || normalizedText.includes("/ month");
+        const mentionsInformationPro = normalizedText.includes("the information pro");
+        const mentionsDeepResearchPitch =
+          normalizedText.includes("ai-powered insights") && normalizedText.includes("deep research");
+
+        return mentionsUpgrade && (mentionsInformationPro || mentionsDeepResearchPitch);
+      };
+      const isVisible = (element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      };
+
+      return Array.from(document.querySelectorAll("body *")).some((element) => {
+        if (!isVisible(element)) return false;
+        const text = clean(element.innerText || element.textContent || "");
+        return text.length >= 40 && text.length <= 3000 && isLikelyBlockingOverlayTextInPage(text);
+      });
+    })
+    .catch(() => false);
+}
+
+async function refreshPageForOverlay(page) {
+  await page.reload({ waitUntil: "domcontentloaded", timeout: 45000 }).catch(() => null);
+  await page.waitForSelector("body", { timeout: 15000 }).catch(() => null);
+  await delay(2500);
+}
+
+async function clearBlockingOverlayWithRefresh({
+  allowRefresh = false,
+  dismissOverlay,
+  hasBlockingOverlay,
+  refreshPage
+}) {
+  const dismissedBeforeRefresh = Boolean(await dismissOverlay());
+  let stillBlocked = Boolean(await hasBlockingOverlay());
+  let dismissedAfterRefresh = false;
+  let refreshed = false;
+
+  if (stillBlocked && allowRefresh) {
+    await refreshPage();
+    refreshed = true;
+    dismissedAfterRefresh = Boolean(await dismissOverlay());
+    stillBlocked = Boolean(await hasBlockingOverlay());
+  }
+
+  return {
+    dismissed: dismissedBeforeRefresh || dismissedAfterRefresh,
+    refreshed,
+    stillBlocked
+  };
+}
+
+async function clearPageBlockingOverlay(page, { allowRefresh = false } = {}) {
+  return clearBlockingOverlayWithRefresh({
+    allowRefresh,
+    dismissOverlay: () => dismissBlockingOverlays(page),
+    hasBlockingOverlay: () => hasBlockingOverlay(page),
+    refreshPage: () => refreshPageForOverlay(page)
+  });
+}
+
+async function waitForIssueToClear({ readState, isBlocked, wait, timeoutMs, pollMs }) {
+  let waitedMs = 0;
+  let state = await readState();
+
+  while (isBlocked(state) && waitedMs < timeoutMs) {
+    const nextWaitMs = Math.min(pollMs, timeoutMs - waitedMs);
+    await wait(nextWaitMs);
+    waitedMs += nextWaitMs;
+    state = await readState();
+  }
+
+  const stillBlocked = isBlocked(state);
+  return {
+    cleared: !stillBlocked,
+    timedOut: stillBlocked && waitedMs >= timeoutMs,
+    waitedMs,
+    state
+  };
+}
+
+function hasArticleCandidates(candidates) {
+  return pickArticleLinks(candidates || []).length > 0;
+}
+
+async function waitForHomeReadiness({ readState, readCandidates, wait, timeoutMs, pollMs }) {
+  let waitedMs = 0;
+  let state = await readState();
+  let candidates = await readCandidates();
+  let ready = !state.issues.includes("cloudflare_challenge") && hasArticleCandidates(candidates);
+
+  while (!ready && waitedMs < timeoutMs) {
+    const nextWaitMs = Math.min(pollMs, timeoutMs - waitedMs);
+    await wait(nextWaitMs);
+    waitedMs += nextWaitMs;
+    state = await readState();
+    candidates = await readCandidates();
+    ready = !state.issues.includes("cloudflare_challenge") && hasArticleCandidates(candidates);
+  }
+
+  return {
+    ready,
+    timedOut: !ready && waitedMs >= timeoutMs,
+    waitedMs,
+    state,
+    candidates
+  };
+}
+
+async function waitForHomepageReadiness(page) {
+  return waitForHomeReadiness({
+    readState: () => readPageState(page),
+    readCandidates: () => extractCandidateLinks(page),
+    wait: delay,
+    timeoutMs: HOME_READY_TIMEOUT_MS,
+    pollMs: HOME_READY_POLL_MS
+  });
+}
+
+async function waitForCloudflareToClear(page) {
+  return waitForIssueToClear({
+    readState: () => readPageState(page),
+    isBlocked: (state) => state.issues.includes("cloudflare_challenge"),
+    wait: delay,
+    timeoutMs: CLOUDFLARE_CLEAR_TIMEOUT_MS,
+    pollMs: CLOUDFLARE_CLEAR_POLL_MS
+  });
+}
+
+function isRetryableCloudflareWaitTimeout(cloudflareWait) {
+  return Boolean(
+    cloudflareWait?.timedOut && cloudflareWait?.state?.issues?.includes("cloudflare_challenge")
+  );
 }
 
 function delay(ms) {
@@ -549,6 +818,12 @@ function isClearlyHomepageLike(text, title, currentUrl) {
   return false;
 }
 
+function shouldRefreshAfterHomepageClick(result, expectedCanonicalUrl) {
+  if (result?.issues?.includes("cloudflare_challenge")) return false;
+  if (isLikelyValidArticleCapture(result, expectedCanonicalUrl)) return false;
+  return isClearlyHomepageLike(result?.text || "", result?.title || "", result?.url || "");
+}
+
 function isLikelyValidArticleCapture(result, expectedCanonicalUrl) {
   const expectedPath = new URL(expectedCanonicalUrl).pathname;
   const actualPath = new URL(result.canonicalUrl || result.url || HOME_URL).pathname;
@@ -654,8 +929,20 @@ async function fetchArticleFromHome(page, item) {
 
   for (let attempt = 1; attempt <= ARTICLE_NAV_RETRIES + 1; attempt += 1) {
     await safeGoHome(page, homeUrl);
+    const overlayState = await clearPageBlockingOverlay(page, { allowRefresh: true });
+    if (overlayState.stillBlocked) {
+      throw new Error(
+        `Blocking The Information Pro/Deep Research overlay remained after one refresh before clicking ${item.canonicalUrl}`
+      );
+    }
     await maybeLightScroll(page);
     await delayBetween(PRE_CLICK_DELAY_MIN_MS, PRE_CLICK_DELAY_MAX_MS);
+    const delayedOverlayState = await clearPageBlockingOverlay(page, { allowRefresh: true });
+    if (delayedOverlayState.stillBlocked) {
+      throw new Error(
+        `Blocking The Information Pro/Deep Research overlay remained after one refresh before clicking ${item.canonicalUrl}`
+      );
+    }
 
     const anchorHandle = await findMatchingAnchorHandle(page, item);
 
@@ -677,6 +964,7 @@ async function fetchArticleFromHome(page, item) {
 
     await delay(ARTICLE_LOAD_DELAY_MS);
     await waitForArticleReadiness(page);
+    await clearPageBlockingOverlay(page);
     await maybeLightScroll(page);
     await delayBetween(POST_OPEN_DELAY_MIN_MS, POST_OPEN_DELAY_MAX_MS);
 
@@ -710,10 +998,23 @@ async function fetchArticleFromHome(page, item) {
     };
 
     if (anchorHandle && !isLikelyValidArticleCapture(result, item.canonicalUrl)) {
-      navigationMode = "direct_goto_retry";
+      if (shouldRefreshAfterHomepageClick(result, item.canonicalUrl)) {
+        await safeGoHome(page, homeUrl);
+        await refreshPageForOverlay(page);
+        const overlayState = await clearPageBlockingOverlay(page);
+        if (overlayState.stillBlocked) {
+          throw new Error(
+            `Blocking The Information Pro/Deep Research overlay remained after one refresh after homepage click for ${item.canonicalUrl}`
+          );
+        }
+        navigationMode = "direct_goto_after_homepage_refresh";
+      } else {
+        navigationMode = "direct_goto_retry";
+      }
       await page.goto(item.canonicalUrl, { waitUntil: "domcontentloaded", timeout: 45000 }).catch(() => null);
       await delay(ARTICLE_LOAD_DELAY_MS);
       await waitForArticleReadiness(page);
+      await clearPageBlockingOverlay(page);
       await maybeLightScroll(page);
       await delayBetween(POST_OPEN_DELAY_MIN_MS, POST_OPEN_DELAY_MAX_MS);
 
@@ -827,11 +1128,18 @@ function shouldStopAfterOlderArticleStreak(fetchedArticles, coverageWindow, opti
 
 export {
   cleanText,
+  clearBlockingOverlayWithRefresh,
   getArticleSlug,
   extractArticleMetadata,
   isClearlyHomepageLike,
+  isLikelyBlockingOverlayText,
   isLikelyValidArticleCapture,
   pickArticleLinks,
+  shouldRefreshAfterHomepageClick,
+  isRetryableCloudflareWaitTimeout,
+  waitForHomeReadiness,
+  waitForIssueToClear,
+  writeFetchPayload,
   shouldStopAfterOlderArticleStreak
 };
 
@@ -842,8 +1150,40 @@ async function main() {
   const { page, reused } = await getHomePage(browser);
 
   try {
-    const { title: pageTitle, issues: homeIssues } = await readPageState(page);
-    const candidates = await extractCandidateLinks(page);
+    let pageState = await readPageState(page);
+    let cloudflareWait = null;
+
+    if (pageState.issues.includes("cloudflare_challenge")) {
+      cloudflareWait = await waitForCloudflareToClear(page);
+      pageState = cloudflareWait.state;
+      if (isRetryableCloudflareWaitTimeout(cloudflareWait)) {
+        const payload = {
+          ok: false,
+          retryable: true,
+          retryReason: "retryable_cloudflare_challenge",
+          fetchedAt: new Date().toISOString(),
+          homeUrl: HOME_URL,
+          pageTitle: pageState.title,
+          homeIssues: pageState.issues,
+          reusedExistingTab: reused,
+          cloudflareWait,
+          coverageWindow,
+          message: "The Information is showing a Cloudflare verification page."
+        };
+        writeFetchPayload(outputPath, payload);
+        console.log(JSON.stringify(payload, null, 2));
+        process.exit(1);
+      }
+    }
+
+    let homeReadiness = await waitForHomepageReadiness(page);
+    pageState = homeReadiness.state;
+
+    const overlayState = await clearPageBlockingOverlay(page, { allowRefresh: true });
+    homeReadiness = await waitForHomepageReadiness(page);
+    pageState = homeReadiness.state;
+    const { title: pageTitle, issues: homeIssues } = pageState;
+    const candidates = homeReadiness.candidates;
     const articles = pickArticleLinks(candidates);
 
     const failurePayload = {
@@ -853,16 +1193,37 @@ async function main() {
       pageTitle,
       homeIssues,
       reusedExistingTab: reused,
+      cloudflareWait,
+      homeReadiness: {
+        ready: homeReadiness.ready,
+        timedOut: homeReadiness.timedOut,
+        waitedMs: homeReadiness.waitedMs,
+        candidateCount: candidates.length,
+        articleCandidateCount: articles.length
+      },
       coverageWindow
     };
+
+    if (overlayState?.stillBlocked) {
+      const payload = {
+        ...failurePayload,
+        homeIssues: [...homeIssues, "blocking_overlay"],
+        overlayState,
+        message: "The Information Pro/Deep Research overlay remained after one refresh."
+      };
+      writeFetchPayload(outputPath, payload);
+      console.log(JSON.stringify(payload, null, 2));
+      process.exit(1);
+    }
 
     if (homeIssues.includes("cloudflare_challenge")) {
       const payload = {
         ...failurePayload,
+        retryable: true,
+        retryReason: "retryable_cloudflare_challenge",
         message: "The Information is showing a Cloudflare verification page."
       };
-      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-      fs.writeFileSync(outputPath, JSON.stringify(payload, null, 2));
+      writeFetchPayload(outputPath, payload);
       console.log(JSON.stringify(payload, null, 2));
       process.exit(1);
     }
@@ -870,10 +1231,11 @@ async function main() {
     if (articles.length === 0) {
       const payload = {
         ...failurePayload,
-        message: "No candidate article links found. You may need to log in first or adjust the homepage."
+        message: homeReadiness.timedOut
+          ? "The Information homepage did not render article links before the readiness timeout."
+          : "No candidate article links found. You may need to log in first or adjust the homepage."
       };
-      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-      fs.writeFileSync(outputPath, JSON.stringify(payload, null, 2));
+      writeFetchPayload(outputPath, payload);
       console.log(JSON.stringify(payload, null, 2));
       process.exit(1);
     }
@@ -995,8 +1357,7 @@ async function main() {
       articles: includedArticles
     };
 
-    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-    fs.writeFileSync(outputPath, JSON.stringify(payload, null, 2));
+    writeFetchPayload(outputPath, payload);
     console.log(JSON.stringify(payload, null, 2));
   } finally {
     if (!reused) {

@@ -28,8 +28,13 @@ if ((Resolve-Path $OutputDir).Path -ieq (Join-Path $root "output\manual")) {
   $env:THE_INFORMATION_CONSERVATIVE_EARLY_STOP = "false"
 }
 powershell -ExecutionPolicy Bypass -File (Join-Path $root "scripts\start-chrome-debug.ps1")
-node (Join-Path $root "scripts\fetch-theinformation.mjs") --output $jsonPath | Out-Null
-if ($LASTEXITCODE -ne 0) {
+$fetchOutput = & node (Join-Path $root "scripts\fetch-theinformation.mjs") --output $jsonPath 2>&1
+$fetchExitCode = $LASTEXITCODE
+if ($fetchExitCode -ne 0) {
+  $fetchOutputText = ($fetchOutput | Out-String).Trim()
+  if ($fetchOutputText) {
+    throw "Fetch step failed while writing $jsonPath`n$fetchOutputText"
+  }
   throw "Fetch step failed while writing $jsonPath"
 }
 

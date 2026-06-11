@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { JSDOM } from "jsdom";
 
 const root = path.resolve(".");
 const rendererPath = path.join(root, "scripts", "render-theinformation-brief.mjs");
@@ -49,7 +50,17 @@ function makeFixture() {
       }
     ],
     other_articles: [],
-    partial_articles: [],
+    partial_articles: [
+      {
+        title: "Salesforce and Snowflake Earnings to Focus Attention on AI's Software Impact",
+        title_translation: "Salesforce 和 Snowflake 财报将聚焦 AI 的软件影响",
+        section: "The Briefing",
+        publication_time: "Apr 04, 2026, 08:00 GMT+8",
+        original_link: "https://www.theinformation.com/newsletters/the-briefing/salesforce-snowflake-earnings",
+        issue_summary: "正文不足，无法可靠分析。",
+        missing_details: ["缺少完整正文。"]
+      }
+    ],
     blocked_articles: [],
     unprocessed_articles: []
   };
@@ -89,4 +100,37 @@ test("renderer outputs the new Chinese brief section structure", () => {
   assert.match(html, /<h3>关键数据与事实（超高颗粒度）<\/h3>/);
   assert.match(html, /<h3>超高颗粒度洞察<\/h3>/);
   assert.match(html, /<h3>为什么重要<\/h3>/);
+});
+
+test("renderer adds a bilingual article directory with article anchors", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "ti-brief-render-"));
+  const inputPath = path.join(tempDir, "brief.json");
+  const textPath = path.join(tempDir, "brief.txt");
+  const htmlPath = path.join(tempDir, "brief.html");
+  const fixture = makeFixture();
+
+  fs.writeFileSync(inputPath, JSON.stringify(fixture), "utf8");
+
+  execFileSync("node", [rendererPath, "--input", inputPath, "--text-output", textPath, "--html-output", htmlPath], {
+    cwd: root,
+    stdio: "pipe"
+  });
+
+  const html = fs.readFileSync(htmlPath, "utf8");
+  const dom = new JSDOM(html, { runScripts: "dangerously" });
+  const document = dom.window.document;
+  const navLinks = [...document.querySelectorAll(".article-nav a")];
+  const articleCards = [...document.querySelectorAll(".article-card")];
+
+  assert.equal(navLinks.length, 2);
+  assert.equal(articleCards.length, 2);
+  assert.equal(document.querySelectorAll(".article-nav-translation").length, 2);
+  assert.equal(articleCards[0].id, "article-1");
+  assert.equal(articleCards[1].id, "article-2");
+  assert.equal(navLinks[0].getAttribute("href"), "#article-1");
+  assert.equal(navLinks[1].getAttribute("href"), "#article-2");
+  assert.ok(navLinks[0].textContent.includes(fixture.featured_articles[0].title));
+  assert.ok(navLinks[0].textContent.includes(fixture.featured_articles[0].title_translation));
+  assert.ok(navLinks[1].textContent.includes(fixture.partial_articles[0].title));
+  assert.ok(navLinks[1].textContent.includes(fixture.partial_articles[0].title_translation));
 });

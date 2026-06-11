@@ -1,10 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "fs";
+import os from "os";
+import path from "path";
 
 import {
+  clearBlockingOverlayWithRefresh,
   extractArticleMetadata,
+  isLikelyBlockingOverlayText,
   isLikelyValidArticleCapture,
   pickArticleLinks,
+  shouldRefreshAfterHomepageClick,
+  isRetryableCloudflareWaitTimeout,
+  waitForHomeReadiness,
+  waitForIssueToClear,
+  writeFetchPayload,
   shouldStopAfterOlderArticleStreak
 } from "../scripts/fetch-theinformation.mjs";
 
@@ -62,6 +72,188 @@ test("rejects homepage-like captures even if a slug is present", () => {
     isLikelyValidArticleCapture(result, "https://www.theinformation.com/articles/openais-tbpn-deal-joke"),
     false
   );
+});
+
+test("recognizes The Information upgrade overlays as blocking article clicks", () => {
+  assert.equal(
+    isLikelyBlockingOverlayText(
+      "The Information Pro $58.25 / Month Upgrade AI-Powered Insights, Beyond the News Deep Research"
+    ),
+    true
+  );
+  assert.equal(isLikelyBlockingOverlayText("Latest Exclusive News Twilio's AI Boost Is a Double-Edged Sword"), false);
+});
+
+test("refreshes once when a blocking overlay remains after dismissal", async () => {
+  let overlayVisible = true;
+  let dismissCount = 0;
+  let refreshCount = 0;
+
+  const result = await clearBlockingOverlayWithRefresh({
+    allowRefresh: true,
+    dismissOverlay: async () => {
+      dismissCount += 1;
+      return false;
+    },
+    hasBlockingOverlay: async () => overlayVisible,
+    refreshPage: async () => {
+      refreshCount += 1;
+      overlayVisible = false;
+    }
+  });
+
+  assert.deepEqual(result, {
+    dismissed: false,
+    refreshed: true,
+    stillBlocked: false
+  });
+  assert.equal(dismissCount, 2);
+  assert.equal(refreshCount, 1);
+});
+
+test("does not refresh when the overlay is gone after dismissal", async () => {
+  let dismissCount = 0;
+  let refreshCount = 0;
+
+  const result = await clearBlockingOverlayWithRefresh({
+    allowRefresh: true,
+    dismissOverlay: async () => {
+      dismissCount += 1;
+      return true;
+    },
+    hasBlockingOverlay: async () => false,
+    refreshPage: async () => {
+      refreshCount += 1;
+    }
+  });
+
+  assert.deepEqual(result, {
+    dismissed: true,
+    refreshed: false,
+    stillBlocked: false
+  });
+  assert.equal(dismissCount, 1);
+  assert.equal(refreshCount, 0);
+});
+
+test("marks homepage-like click captures as refresh fallback candidates", () => {
+  const result = {
+    canonicalUrl: "https://www.theinformation.com/articles/openais-tbpn-deal-joke",
+    url: "https://www.theinformation.com/?rc=jn0pp4",
+    title: "The Information",
+    publishedDateKey: null,
+    issues: [],
+    text: "The Information Latest Exclusive News Upgrade to Pro Community Directory"
+  };
+
+  assert.equal(
+    shouldRefreshAfterHomepageClick(result, "https://www.theinformation.com/articles/openais-tbpn-deal-joke"),
+    true
+  );
+  assert.equal(
+    shouldRefreshAfterHomepageClick(
+      { ...result, issues: ["cloudflare_challenge"] },
+      "https://www.theinformation.com/articles/openais-tbpn-deal-joke"
+    ),
+    false
+  );
+});
+
+test("waits for a Cloudflare issue to clear before continuing", async () => {
+  const states = [
+    { issues: ["cloudflare_challenge"], title: "Please wait" },
+    { issues: ["cloudflare_challenge"], title: "Please wait" },
+    { issues: [], title: "The Information" }
+  ];
+  const waits = [];
+
+  const result = await waitForIssueToClear({
+    readState: async () => states.shift(),
+    isBlocked: (state) => state.issues.includes("cloudflare_challenge"),
+    wait: async (ms) => waits.push(ms),
+    timeoutMs: 15000,
+    pollMs: 5000
+  });
+
+  assert.deepEqual(result, {
+    cleared: true,
+    timedOut: false,
+    waitedMs: 10000,
+    state: { issues: [], title: "The Information" }
+  });
+  assert.deepEqual(waits, [5000, 5000]);
+});
+
+test("waits through empty homepage states until article links are ready", async () => {
+  const states = [
+    { title: "", bodyText: "", issues: [] },
+    { title: "The Information", bodyText: "Latest Exclusive News", issues: [] }
+  ];
+  const candidateLists = [
+    [],
+    [
+      {
+        href: "https://www.theinformation.com/articles/openais-revenue-chief-barnstorms-business-customers",
+        text: "OpenAI’s Revenue Chief Barnstorms for Business Customers"
+      }
+    ]
+  ];
+  const waits = [];
+
+  const result = await waitForHomeReadiness({
+    readState: async () => states.shift(),
+    readCandidates: async () => candidateLists.shift(),
+    wait: async (ms) => waits.push(ms),
+    timeoutMs: 15000,
+    pollMs: 5000
+  });
+
+  assert.equal(result.ready, true);
+  assert.equal(result.timedOut, false);
+  assert.equal(result.waitedMs, 5000);
+  assert.deepEqual(waits, [5000]);
+  assert.equal(pickArticleLinks(result.candidates).length, 1);
+});
+
+test("stops waiting for Cloudflare after the configured timeout", async () => {
+  const waits = [];
+
+  const result = await waitForIssueToClear({
+    readState: async () => ({ issues: ["cloudflare_challenge"], title: "Please wait" }),
+    isBlocked: (state) => state.issues.includes("cloudflare_challenge"),
+    wait: async (ms) => waits.push(ms),
+    timeoutMs: 12000,
+    pollMs: 5000
+  });
+
+  assert.equal(result.cleared, false);
+  assert.equal(result.timedOut, true);
+  assert.equal(result.waitedMs, 12000);
+  assert.deepEqual(waits, [5000, 5000, 2000]);
+});
+
+test("marks a Cloudflare wait timeout as retryable for automation", () => {
+  assert.equal(
+    isRetryableCloudflareWaitTimeout({
+      timedOut: true,
+      state: { issues: ["cloudflare_challenge"] }
+    }),
+    true
+  );
+  assert.equal(
+    isRetryableCloudflareWaitTimeout({
+      cleared: true,
+      timedOut: false,
+      state: { issues: [] }
+    }),
+    false
+  );
+});
+
+test("defaults the Cloudflare homepage wait window to four minutes", () => {
+  const script = fs.readFileSync(path.resolve("scripts", "fetch-theinformation.mjs"), "utf8");
+
+  assert.match(script, /THE_INFORMATION_CLOUDFLARE_CLEAR_TIMEOUT_MS \|\| "240000"/);
 });
 
 test("extracts publication time from visible article text when structured metadata is missing", () => {
@@ -168,4 +360,32 @@ test("does not count challenge, error, or missing-date articles toward older str
     }),
     false
   );
+});
+
+test("failed fetch payloads do not overwrite the last successful output", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "ti-fetch-"));
+  const outputPath = path.join(tempDir, "theinformation-latest.json");
+  const previousPayload = { ok: true, articleCount: 3 };
+  const failurePayload = { ok: false, message: "The Information is showing a Cloudflare verification page." };
+
+  fs.writeFileSync(outputPath, JSON.stringify(previousPayload, null, 2));
+
+  const result = writeFetchPayload(outputPath, failurePayload);
+
+  assert.equal(result.wrotePrimaryOutput, false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(outputPath, "utf8")), previousPayload);
+  assert.deepEqual(JSON.parse(fs.readFileSync(`${outputPath}.failed.json`, "utf8")), failurePayload);
+});
+
+test("successful fetch payloads clear stale failed output", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "ti-fetch-"));
+  const outputPath = path.join(tempDir, "theinformation-latest.json");
+  const failedOutputPath = `${outputPath}.failed.json`;
+
+  fs.writeFileSync(failedOutputPath, JSON.stringify({ ok: false, retryReason: "retryable_cloudflare_challenge" }));
+
+  const result = writeFetchPayload(outputPath, { ok: true, articleCount: 3 });
+
+  assert.equal(result.wrotePrimaryOutput, true);
+  assert.equal(fs.existsSync(failedOutputPath), false);
 });

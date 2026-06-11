@@ -130,6 +130,7 @@
       "additionalProperties": false,
       "required": [
         "title",
+        "title_translation",
         "section",
         "publication_time",
         "original_link",
@@ -138,6 +139,9 @@
       ],
       "properties": {
         "title": {
+          "type": "string"
+        },
+        "title_translation": {
           "type": "string"
         },
         "section": {
