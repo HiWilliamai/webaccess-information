@@ -28,8 +28,14 @@ if ((Resolve-Path $OutputDir).Path -ieq (Join-Path $root "output\manual")) {
   $env:THE_INFORMATION_CONSERVATIVE_EARLY_STOP = "false"
 }
 powershell -ExecutionPolicy Bypass -File (Join-Path $root "scripts\start-chrome-debug.ps1")
-$fetchOutput = & node (Join-Path $root "scripts\fetch-theinformation.mjs") --output $jsonPath 2>&1
-$fetchExitCode = $LASTEXITCODE
+$previousErrorActionPreference = $ErrorActionPreference
+try {
+  $ErrorActionPreference = "Continue"
+  $fetchOutput = & node (Join-Path $root "scripts\fetch-theinformation.mjs") --output $jsonPath 2>&1
+  $fetchExitCode = $LASTEXITCODE
+} finally {
+  $ErrorActionPreference = $previousErrorActionPreference
+}
 if ($fetchExitCode -ne 0) {
   $fetchOutputText = ($fetchOutput | Out-String).Trim()
   if ($fetchOutputText) {

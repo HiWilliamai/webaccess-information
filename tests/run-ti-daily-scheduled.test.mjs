@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const scriptPath = new URL("../scripts/run-ti-daily-scheduled.ps1", import.meta.url);
+const dailyScriptPath = new URL("../scripts/run-theinformation-daily.ps1", import.meta.url);
 
 test("scheduled automation defaults brief generation to three attempts", async () => {
   const script = await readFile(scriptPath, "utf8");
@@ -32,4 +33,26 @@ test("scheduled automation retries the daily run only for retryable Cloudflare f
   assert.match(script, /\$currentRetryDelaySeconds\s*=\s*\$fetchRetryDelaySeconds/);
   assert.match(script, /if\s*\(\s*\$dailyAttempt\s*-eq\s*2\s*\)\s*{[\s\S]*\$currentRetryDelaySeconds\s*=\s*120/);
   assert.match(script, /Start-Sleep\s+-Seconds\s+\$currentRetryDelaySeconds/);
+});
+
+test("scheduled automation captures daily stderr before retry evaluation", async () => {
+  const script = await readFile(scriptPath, "utf8");
+
+  assert.match(
+    script,
+    /\$previousErrorActionPreference\s*=\s*\$ErrorActionPreference[\s\S]*\$ErrorActionPreference\s*=\s*"Continue"[\s\S]*\$dailyOutput\s*=\s*&\s+powershell[\s\S]*-File\s+\$dailyScript[\s\S]*2>&1[\s\S]*\$dailyExitCode\s*=\s*\$LASTEXITCODE[\s\S]*finally\s*{[\s\S]*\$ErrorActionPreference\s*=\s*\$previousErrorActionPreference/
+  );
+  assert.match(
+    script,
+    /\$isRetryableCloudflareFailure\s*=\s*\$dailyOutputText\s*-match\s*"retryable_cloudflare_challenge"/
+  );
+});
+
+test("daily automation captures fetch stderr before checking retryable payload", async () => {
+  const script = await readFile(dailyScriptPath, "utf8");
+
+  assert.match(
+    script,
+    /\$previousErrorActionPreference\s*=\s*\$ErrorActionPreference[\s\S]*\$ErrorActionPreference\s*=\s*"Continue"[\s\S]*\$fetchOutput\s*=\s*&\s+node[\s\S]*fetch-theinformation\.mjs[\s\S]*2>&1[\s\S]*\$fetchExitCode\s*=\s*\$LASTEXITCODE[\s\S]*finally\s*{[\s\S]*\$ErrorActionPreference\s*=\s*\$previousErrorActionPreference/
+  );
 });

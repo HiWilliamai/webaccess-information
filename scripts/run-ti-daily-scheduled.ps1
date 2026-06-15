@@ -55,8 +55,14 @@ try {
     $attemptStartedAt = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     "[$attemptStartedAt] Daily run attempt $dailyAttempt of $fetchMaxAttempts started." | Out-File -FilePath $logPath -Encoding utf8 -Append
 
-    $dailyOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File $dailyScript -OutputDir $outputDir 2>&1
-    $dailyExitCode = $LASTEXITCODE
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+      $ErrorActionPreference = "Continue"
+      $dailyOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File $dailyScript -OutputDir $outputDir 2>&1
+      $dailyExitCode = $LASTEXITCODE
+    } finally {
+      $ErrorActionPreference = $previousErrorActionPreference
+    }
     $dailyOutput | Out-File -FilePath $logPath -Encoding utf8 -Append
 
     if ($dailyExitCode -eq 0) {
