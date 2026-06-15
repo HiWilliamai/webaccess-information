@@ -9,6 +9,7 @@ const HOME_URL = process.env.THE_INFORMATION_HOME_URL || "https://www.theinforma
 const MAX_CANDIDATES = Number(process.env.THE_INFORMATION_MAX_CANDIDATES || "0");
 const DEBUG_URL = process.env.CHROME_DEBUG_URL || "http://127.0.0.1:29825";
 const DEFAULT_OUTPUT_PATH = path.resolve("output", "theinformation-latest.json");
+const FETCH_PAUSE_POLL_MS = Number(process.env.THE_INFORMATION_FETCH_PAUSE_POLL_MS || "5000");
 const REPORT_TIMEZONE = process.env.THE_INFORMATION_TIMEZONE || "Asia/Shanghai";
 const LOOKBACK_DAYS = Number(process.env.THE_INFORMATION_LOOKBACK_DAYS || "1");
 const ARTICLE_NAV_RETRIES = Number(process.env.THE_INFORMATION_ARTICLE_NAV_RETRIES || "1");
@@ -47,6 +48,13 @@ function getOutputPath() {
   return process.env.THE_INFORMATION_OUTPUT_PATH || DEFAULT_OUTPUT_PATH;
 }
 
+function getFetchPausePath(outputPath) {
+  if (!process.env.THE_INFORMATION_FETCH_PAUSE_PATH) {
+    return path.join(path.dirname(outputPath), "theinformation-fetch.pause");
+  }
+  return path.resolve(process.env.THE_INFORMATION_FETCH_PAUSE_PATH);
+}
+
 function writeFetchPayload(outputPath, payload) {
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
@@ -64,6 +72,39 @@ function writeFetchPayload(outputPath, payload) {
   return {
     wrotePrimaryOutput: true,
     outputPath
+  };
+}
+
+async function waitForFetchResume({
+  pausePath,
+  pollMs = FETCH_PAUSE_POLL_MS,
+  isPaused = () => fs.existsSync(pausePath),
+  wait = delay,
+  log = console.log,
+  context = {}
+}) {
+  let waitedMs = 0;
+  let didPause = false;
+
+  while (isPaused()) {
+    if (!didPause) {
+      const nextArticleText = context.nextArticleIndex ? ` before article ${context.nextArticleIndex}` : "";
+      const completedText =
+        Number.isInteger(context.completedArticleCount) ? ` after ${context.completedArticleCount} completed` : "";
+      log(`Fetch paused${nextArticleText}${completedText}. Remove ${pausePath} to resume.`);
+      didPause = true;
+    }
+    await wait(pollMs);
+    waitedMs += pollMs;
+  }
+
+  if (didPause) {
+    log(`Fetch resumed after ${waitedMs}ms.`);
+  }
+
+  return {
+    paused: didPause,
+    waitedMs
   };
 }
 
@@ -1139,12 +1180,14 @@ export {
   isRetryableCloudflareWaitTimeout,
   waitForHomeReadiness,
   waitForIssueToClear,
+  waitForFetchResume,
   writeFetchPayload,
   shouldStopAfterOlderArticleStreak
 };
 
 async function main() {
   const outputPath = getOutputPath();
+  const pausePath = getFetchPausePath(outputPath);
   const coverageWindow = getCoverageWindow(REPORT_TIMEZONE, LOOKBACK_DAYS);
   const browser = await puppeteer.connect({ browserURL: DEBUG_URL, defaultViewport: null });
   const { page, reused } = await getHomePage(browser);
@@ -1246,6 +1289,14 @@ async function main() {
     let stopReason = null;
 
     for (let index = 0; index < articles.length; index += 1) {
+      await waitForFetchResume({
+        pausePath,
+        context: {
+          nextArticleIndex: index + 1,
+          completedArticleCount: fetchedArticles.length
+        }
+      });
+
       const item = articles[index];
 
       try {

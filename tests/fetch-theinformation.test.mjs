@@ -14,6 +14,7 @@ import {
   isRetryableCloudflareWaitTimeout,
   waitForHomeReadiness,
   waitForIssueToClear,
+  waitForFetchResume,
   writeFetchPayload,
   shouldStopAfterOlderArticleStreak
 } from "../scripts/fetch-theinformation.mjs";
@@ -388,4 +389,31 @@ test("successful fetch payloads clear stale failed output", () => {
 
   assert.equal(result.wrotePrimaryOutput, true);
   assert.equal(fs.existsSync(failedOutputPath), false);
+});
+
+test("waits for fetch pause marker to clear before continuing", async () => {
+  const pausedStates = [true, true, false];
+  const waits = [];
+  const logs = [];
+
+  const result = await waitForFetchResume({
+    pausePath: "pause.marker",
+    pollMs: 250,
+    isPaused: () => pausedStates.shift() ?? false,
+    wait: async (ms) => waits.push(ms),
+    log: (message) => logs.push(message),
+    context: {
+      nextArticleIndex: 3,
+      completedArticleCount: 2
+    }
+  });
+
+  assert.deepEqual(result, {
+    paused: true,
+    waitedMs: 500
+  });
+  assert.deepEqual(waits, [250, 250]);
+  assert.equal(logs.length, 2);
+  assert.match(logs[0], /Fetch paused before article 3/);
+  assert.match(logs[1], /Fetch resumed after 500ms/);
 });
