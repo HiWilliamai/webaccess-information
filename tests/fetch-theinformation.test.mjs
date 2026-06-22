@@ -3,10 +3,13 @@ import assert from "node:assert/strict";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { PUPPETEER_REVISIONS } from "puppeteer-core/internal/revisions.js";
 
 import {
+  assertSupportedBrowserVersion,
   clearBlockingOverlayWithRefresh,
   extractArticleMetadata,
+  fetchArticleWithPageRecovery,
   isLikelyBlockingOverlayText,
   isLikelyValidArticleCapture,
   pickArticleLinks,
@@ -16,6 +19,8 @@ import {
   waitForIssueToClear,
   waitForFetchResume,
   writeFetchPayload,
+  markRetryableIfArticleCloudflareOnly,
+  markRetryableIfBrowserPageFailures,
   shouldStopAfterOlderArticleStreak
 } from "../scripts/fetch-theinformation.mjs";
 
@@ -376,6 +381,111 @@ test("failed fetch payloads do not overwrite the last successful output", () => 
   assert.equal(result.wrotePrimaryOutput, false);
   assert.deepEqual(JSON.parse(fs.readFileSync(outputPath, "utf8")), previousPayload);
   assert.deepEqual(JSON.parse(fs.readFileSync(`${outputPath}.failed.json`, "utf8")), failurePayload);
+});
+
+test("marks article-level Cloudflare-only results as retryable failures", () => {
+  const payload = markRetryableIfArticleCloudflareOnly({
+    ok: true,
+    completedArticleCount: 2,
+    blockedArticleCount: 2,
+    partialArticleCount: 0,
+    articleCount: 0,
+    blockedArticles: [
+      {
+        canonicalUrl: "https://www.theinformation.com/briefings/example",
+        issues: ["cloudflare_challenge"]
+      }
+    ],
+    articles: []
+  });
+
+  assert.equal(payload.ok, false);
+  assert.equal(payload.retryable, true);
+  assert.equal(payload.retryReason, "retryable_cloudflare_challenge");
+  assert.match(payload.message, /article pages are showing Cloudflare/i);
+});
+
+test("keeps successful payloads successful when at least one article was captured", () => {
+  const payload = markRetryableIfArticleCloudflareOnly({
+    ok: true,
+    completedArticleCount: 3,
+    blockedArticleCount: 2,
+    partialArticleCount: 0,
+    articleCount: 1,
+    blockedArticles: [{ issues: ["cloudflare_challenge"] }],
+    articles: [{ title: "Captured article" }]
+  });
+
+  assert.equal(payload.ok, true);
+  assert.equal(payload.retryable, undefined);
+});
+
+test("recreates a dead page and retries the current article once", async () => {
+  const deadPage = {
+    isClosed: () => true
+  };
+  const replacementPage = {
+    isClosed: () => false
+  };
+  const attempts = [];
+  const recoveredPages = [];
+
+  const result = await fetchArticleWithPageRecovery({
+    page: deadPage,
+    item: { canonicalUrl: "https://www.theinformation.com/articles/example" },
+    fetchArticle: async (page) => {
+      attempts.push(page);
+      if (page === deadPage) {
+        throw new Error("Protocol error (Runtime.callFunctionOn): Target closed");
+      }
+      return { title: "Recovered article" };
+    },
+    recoverPage: async (page) => {
+      recoveredPages.push(page);
+      return replacementPage;
+    }
+  });
+
+  assert.equal(result.page, replacementPage);
+  assert.deepEqual(result.article, { title: "Recovered article" });
+  assert.deepEqual(attempts, [deadPage, replacementPage]);
+  assert.deepEqual(recoveredPages, [deadPage]);
+});
+
+test("installed Puppeteer supports the Chrome major used by automation", () => {
+  assert.equal(PUPPETEER_REVISIONS.chrome.split(".")[0], "149");
+});
+
+test("rejects a Chrome major that Puppeteer does not support", () => {
+  assert.throws(
+    () => assertSupportedBrowserVersion("Chrome/149.0.7827.104", "146.0.7680.153"),
+    /Chrome 149.*supports Chrome 146/i
+  );
+});
+
+test("accepts different patch versions within the supported Chrome major", () => {
+  assert.doesNotThrow(() =>
+    assertSupportedBrowserVersion("Chrome/149.0.7827.104", "149.0.7827.22")
+  );
+});
+
+test("marks exhausted browser page failures as retryable instead of publishing partial output", () => {
+  const payload = markRetryableIfBrowserPageFailures({
+    ok: true,
+    completedArticleCount: 12,
+    articleCount: 2,
+    unprocessedArticles: [
+      {
+        canonicalUrl: "https://www.theinformation.com/articles/example",
+        reason: "fetch_error:Attempted to use detached Frame 'ABC'."
+      }
+    ]
+  });
+
+  assert.equal(payload.ok, false);
+  assert.equal(payload.retryable, true);
+  assert.equal(payload.retryReason, "retryable_browser_page_failure");
+  assert.match(payload.message, /browser page became invalid/i);
 });
 
 test("successful fetch payloads clear stale failed output", () => {

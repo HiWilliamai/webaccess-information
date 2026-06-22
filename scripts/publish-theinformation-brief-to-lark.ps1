@@ -124,8 +124,20 @@ function Invoke-LarkFetchDocumentMarkdown {
     [string]$Doc
   )
 
-  $result = Invoke-LarkCliWithRetry -CliArgs @("docs", "+fetch", "--api-version", "v2", "--as", $Identity, "--doc", $Doc, "--limit", "200000", "--jq", ".data.document.content") -Description "docs +fetch for '$Doc'"
+  $result = Invoke-LarkCliWithRetry -CliArgs @("docs", "+fetch", "--api-version", "v2", "--as", $Identity, "--doc", $Doc, "--doc-format", "markdown", "--jq", ".data.document.content") -Description "docs +fetch for '$Doc'"
   return [string]::Join("`n", @($result | ForEach-Object { [string]$_ }))
+}
+
+function ConvertFrom-LarkMarkdownEscapes {
+  param(
+    [string]$Markdown
+  )
+
+  foreach ($escaped in @('\\', '\`', '\*', '\_', '\[', '\]', '\$', '\~', '\<')) {
+    $Markdown = $Markdown.Replace($escaped, $escaped.Substring(1))
+  }
+
+  return $Markdown
 }
 
 function Assert-LarkDocumentContainsMarkers {
@@ -143,6 +155,7 @@ function Assert-LarkDocumentContainsMarkers {
   $maxAttempts = 3
   for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
     $markdown = Invoke-LarkFetchDocumentMarkdown -Doc $Doc
+    $markdown = ConvertFrom-LarkMarkdownEscapes -Markdown $markdown
     $missingMarkers = @($cleanMarkers | Where-Object { $markdown.IndexOf($_, [System.StringComparison]::Ordinal) -lt 0 })
     if ($missingMarkers.Count -eq 0) {
       return
@@ -248,8 +261,8 @@ function ConvertTo-LarkV2CreateContent {
     return $Markdown
   }
 
-  $encodedTitle = [System.Net.WebUtility]::HtmlEncode($Title)
-  return "<title>$encodedTitle</title>`n$Markdown"
+  $bodyMarkdown = [regex]::Replace($Markdown, '(?m)^(#{1,5})(?=\s)', '#$1')
+  return "# $Title`n`n$bodyMarkdown"
 }
 
 function Move-LarkDocumentToDestination {

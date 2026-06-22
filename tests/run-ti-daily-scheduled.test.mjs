@@ -24,12 +24,15 @@ test("scheduled automation defaults Cloudflare fetch recovery settings", async (
   assert.match(script, /\$env:THE_INFORMATION_FETCH_RETRY_DELAY_SECONDS\s*=\s*"60"/);
 });
 
-test("scheduled automation retries the daily run only for retryable Cloudflare failures", async () => {
+test("scheduled automation retries retryable Cloudflare and browser page failures", async () => {
   const script = await readFile(scriptPath, "utf8");
 
   assert.match(script, /for\s*\(\s*\$dailyAttempt\s*=\s*1;\s*\$dailyAttempt\s+-le\s+\$fetchMaxAttempts;/);
   assert.match(script, /\$dailyOutput\s*=\s*&\s+powershell[\s\S]*-File\s+\$dailyScript[\s\S]*2>&1/);
-  assert.match(script, /\$isRetryableCloudflareFailure\s*=\s*\$dailyOutputText\s*-match\s*"retryable_cloudflare_challenge"/);
+  assert.match(
+    script,
+    /\$isRetryableFetchFailure\s*=\s*\$dailyOutputText\s*-match\s*"retryable_\(cloudflare_challenge\|browser_page_failure\)"/
+  );
   assert.match(script, /\$currentRetryDelaySeconds\s*=\s*\$fetchRetryDelaySeconds/);
   assert.match(script, /if\s*\(\s*\$dailyAttempt\s*-eq\s*2\s*\)\s*{[\s\S]*\$currentRetryDelaySeconds\s*=\s*120/);
   assert.match(script, /Start-Sleep\s+-Seconds\s+\$currentRetryDelaySeconds/);
@@ -44,7 +47,7 @@ test("scheduled automation captures daily stderr before retry evaluation", async
   );
   assert.match(
     script,
-    /\$isRetryableCloudflareFailure\s*=\s*\$dailyOutputText\s*-match\s*"retryable_cloudflare_challenge"/
+    /\$isRetryableFetchFailure\s*=\s*\$dailyOutputText\s*-match\s*"retryable_\(cloudflare_challenge\|browser_page_failure\)"/
   );
 });
 

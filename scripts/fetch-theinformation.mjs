@@ -1,4 +1,5 @@
 import puppeteer from "puppeteer-core";
+import { PUPPETEER_REVISIONS } from "puppeteer-core/internal/revisions.js";
 import { JSDOM } from "jsdom";
 import { Readability } from "@mozilla/readability";
 import fs from "fs";
@@ -38,6 +39,13 @@ const HOME_READY_POLL_MS = Number(process.env.THE_INFORMATION_HOME_READY_POLL_MS
 const SUSPENDED_MARKER = "Your account has been suspended";
 const CLOUDFLARE_MARKERS = ["Just a moment...", "Please wait...", "执行安全验证", "请稍候"];
 const PAYWALL_MARKERS = ["Subscribe to unlock", "Subscribe now", "Save 25%", "Already a subscriber? Sign in"];
+const BROWSER_PAGE_ERROR_MARKERS = [
+  "Target closed",
+  "detached Frame",
+  "Session closed",
+  "Connection closed",
+  "Browsing context has been discarded"
+];
 
 function getOutputPath() {
   const args = process.argv.slice(2);
@@ -1167,11 +1175,119 @@ function shouldStopAfterOlderArticleStreak(fetchedArticles, coverageWindow, opti
   return false;
 }
 
+function getMajorVersion(version) {
+  const match = String(version || "").match(/(?:^|\/)(\d+)(?:\.|$)/);
+  return match ? Number(match[1]) : null;
+}
+
+function assertSupportedBrowserVersion(browserVersion, supportedChromeRevision) {
+  const browserMajor = getMajorVersion(browserVersion);
+  const supportedMajor = getMajorVersion(supportedChromeRevision);
+
+  if (!browserMajor || !supportedMajor) {
+    throw new Error(
+      `Unable to compare Chrome and Puppeteer versions: browser=${browserVersion}, supported=${supportedChromeRevision}`
+    );
+  }
+
+  if (browserMajor !== supportedMajor) {
+    throw new Error(
+      `Chrome ${browserMajor} is incompatible with the installed Puppeteer, which supports Chrome ${supportedMajor}. Update puppeteer-core before running the automation.`
+    );
+  }
+}
+
+function isInvalidBrowserPageError(error, page) {
+  if (page?.isClosed?.()) return true;
+
+  const message = error instanceof Error ? error.message : String(error);
+  return BROWSER_PAGE_ERROR_MARKERS.some((marker) => message.includes(marker));
+}
+
+async function fetchArticleWithPageRecovery({
+  page,
+  item,
+  fetchArticle,
+  recoverPage,
+  maxPageRecoveries = 1
+}) {
+  let currentPage = page;
+  let recoveryCount = 0;
+
+  while (true) {
+    try {
+      const article = await fetchArticle(currentPage, item);
+      return {
+        article,
+        page: currentPage,
+        recoveryCount
+      };
+    } catch (error) {
+      if (
+        recoveryCount >= maxPageRecoveries ||
+        !isInvalidBrowserPageError(error, currentPage)
+      ) {
+        throw error;
+      }
+
+      currentPage = await recoverPage(currentPage, error);
+      recoveryCount += 1;
+    }
+  }
+}
+
+function markRetryableIfArticleCloudflareOnly(payload) {
+  const completedArticleCount = Number(payload?.completedArticleCount || 0);
+  const blockedArticleCount = Number(payload?.blockedArticleCount || 0);
+  const articleCount = Number(payload?.articleCount || 0);
+  const partialArticleCount = Number(payload?.partialArticleCount || 0);
+
+  if (
+    payload?.ok === true &&
+    completedArticleCount > 0 &&
+    blockedArticleCount > 0 &&
+    completedArticleCount === blockedArticleCount &&
+    articleCount === 0 &&
+    partialArticleCount === 0
+  ) {
+    return {
+      ...payload,
+      ok: false,
+      retryable: true,
+      retryReason: "retryable_cloudflare_challenge",
+      message: "The Information article pages are showing Cloudflare verification pages."
+    };
+  }
+
+  return payload;
+}
+
+function markRetryableIfBrowserPageFailures(payload) {
+  const browserPageFailures = (payload?.unprocessedArticles || []).filter((article) =>
+    BROWSER_PAGE_ERROR_MARKERS.some((marker) => String(article?.reason || "").includes(marker))
+  );
+
+  if (payload?.ok === true && browserPageFailures.length > 0) {
+    return {
+      ...payload,
+      ok: false,
+      retryable: true,
+      retryReason: "retryable_browser_page_failure",
+      browserPageFailureCount: browserPageFailures.length,
+      message: "The browser page became invalid after recovery, so partial output was not published."
+    };
+  }
+
+  return payload;
+}
+
 export {
+  assertSupportedBrowserVersion,
   cleanText,
   clearBlockingOverlayWithRefresh,
   getArticleSlug,
   extractArticleMetadata,
+  fetchArticleWithPageRecovery,
   isClearlyHomepageLike,
   isLikelyBlockingOverlayText,
   isLikelyValidArticleCapture,
@@ -1182,6 +1298,8 @@ export {
   waitForIssueToClear,
   waitForFetchResume,
   writeFetchPayload,
+  markRetryableIfArticleCloudflareOnly,
+  markRetryableIfBrowserPageFailures,
   shouldStopAfterOlderArticleStreak
 };
 
@@ -1190,7 +1308,10 @@ async function main() {
   const pausePath = getFetchPausePath(outputPath);
   const coverageWindow = getCoverageWindow(REPORT_TIMEZONE, LOOKBACK_DAYS);
   const browser = await puppeteer.connect({ browserURL: DEBUG_URL, defaultViewport: null });
-  const { page, reused } = await getHomePage(browser);
+  assertSupportedBrowserVersion(await browser.version(), PUPPETEER_REVISIONS.chrome);
+  const initialHomePage = await getHomePage(browser);
+  let page = initialHomePage.page;
+  const reused = initialHomePage.reused;
 
   try {
     let pageState = await readPageState(page);
@@ -1300,7 +1421,19 @@ async function main() {
       const item = articles[index];
 
       try {
-        const article = await fetchArticleFromHome(page, item);
+        const fetchResult = await fetchArticleWithPageRecovery({
+          page,
+          item,
+          fetchArticle: fetchArticleFromHome,
+          recoverPage: async (stalePage) => {
+            await stalePage.close().catch(() => null);
+            const replacementHomePage = await getHomePage(browser);
+            page = replacementHomePage.page;
+            return page;
+          }
+        });
+        page = fetchResult.page;
+        const article = fetchResult.article;
         fetchedArticles.push(article);
 
         if (article.issues.includes("cloudflare_challenge")) {
@@ -1377,7 +1510,7 @@ async function main() {
       }))
     );
 
-    const payload = {
+    const payload = markRetryableIfBrowserPageFailures(markRetryableIfArticleCloudflareOnly({
       ok: true,
       fetchedAt: new Date().toISOString(),
       homeUrl: HOME_URL,
@@ -1406,10 +1539,13 @@ async function main() {
       excludedOlderArticles,
       articleCount: includedArticles.length,
       articles: includedArticles
-    };
+    }));
 
     writeFetchPayload(outputPath, payload);
     console.log(JSON.stringify(payload, null, 2));
+    if (payload.ok === false) {
+      process.exit(1);
+    }
   } finally {
     if (!reused) {
       await page.close().catch(() => null);

@@ -71,8 +71,8 @@ try {
     }
 
     $dailyOutputText = ($dailyOutput | Out-String)
-    $isRetryableCloudflareFailure = $dailyOutputText -match "retryable_cloudflare_challenge"
-    if (!$isRetryableCloudflareFailure -or $dailyAttempt -eq $fetchMaxAttempts) {
+    $isRetryableFetchFailure = $dailyOutputText -match "retryable_(cloudflare_challenge|browser_page_failure)"
+    if (!$isRetryableFetchFailure -or $dailyAttempt -eq $fetchMaxAttempts) {
       throw "Daily script exited with code $dailyExitCode"
     }
 
@@ -82,7 +82,7 @@ try {
     }
 
     $retryAt = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    "[$retryAt] Daily run attempt $dailyAttempt hit retryable Cloudflare challenge; retrying in $currentRetryDelaySeconds seconds." | Out-File -FilePath $logPath -Encoding utf8 -Append
+    "[$retryAt] Daily run attempt $dailyAttempt hit a retryable fetch failure; retrying in $currentRetryDelaySeconds seconds." | Out-File -FilePath $logPath -Encoding utf8 -Append
     if ($currentRetryDelaySeconds -gt 0) {
       Start-Sleep -Seconds $currentRetryDelaySeconds
     }
